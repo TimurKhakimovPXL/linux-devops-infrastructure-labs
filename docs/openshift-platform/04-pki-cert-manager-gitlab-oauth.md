@@ -1,11 +1,11 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
 
-## Target 4: PKI, GitLab HTTPS, and Identity Provider
+# Target 4: PKI, GitLab HTTPS, and Identity Provider
 
-**Objective:** Establish a private Certificate Authority managed by cert-manager inside OpenShift, issue and auto-renew TLS certificates for all cluster ingress and the GitLab VM, then configure GitLab as the OpenShift identity provider so GitLab users can authenticate to the cluster.
-**Target Environment:** Single Node OpenShift lab — Single Node OpenShift 4.21
-**GitLab Instance:** `https://gitlab.lab.example.internal` (the GitLab VM — `192.168.50.30`)
+**Objective:** Create an internal CA, use cert-manager to renew the OpenShift and GitLab certificates, and let users sign in to OpenShift through GitLab.
+**Target Environment:** Single Node OpenShift lab: Single Node OpenShift 4.21
+**GitLab Instance:** `https://gitlab.lab.example.internal` (the GitLab VM: `192.168.50.30`)
 **cert-manager Operator:** v1.18.1 (`stable-v1` channel)
 
 ---
@@ -16,31 +16,31 @@
 
 | Certificate | Issued To | Namespace | Secret | Consumer |
 |---|---|---|---|---|
-| Wildcard | `*.apps.lab.example.internal` | `openshift-ingress` | `wildcard-apps-stage-tls` | IngressController — all Routes |
+| Wildcard | `*.apps.lab.example.internal` | `openshift-ingress` | `wildcard-apps-stage-tls` | IngressController: all Routes |
 | GitLab | `gitlab.lab.example.internal` | `lab-infra` | `gitlab-tls` | GitLab VM nginx via pull agent |
 
 ### 1.2 Design Decision: GitLab Certificate Delivery
 
-cert-manager manages certificates as Kubernetes Secrets inside the cluster. GitLab is an external VM at `192.168.50.30` — not a pod inside OpenShift. There is no native cert-manager mechanism to write a Secret to a VM filesystem. Three approaches were evaluated:
+cert-manager stores certificates as Kubernetes Secrets. GitLab runs on a separate VM at `192.168.50.30`, so cert-manager cannot write the certificate directly to its filesystem. I considered three ways to bridge that gap:
 
-|                                 | Option 1 — Pull agent (chosen)                           | Option 2 — Push CronJob                                          | Option 3 — GitLab in OpenShift                                           |
+|                                 | Option 1: Pull agent (chosen)                           | Option 2: Push CronJob                                          | Option 3: GitLab in OpenShift                                           |
 | ------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | **Mechanism**                   | systemd timer on GitLab VM pulls cert from OpenShift API | Kubernetes CronJob SSHs into GitLab VM and copies cert           | GitLab runs as a container, cert-manager manages it natively via a Route |
 | **Credentials stored**          | Least-privilege SA token on GitLab VM filesystem         | SSH private key as cluster Secret                                | N/A                                                                      |
-| **Firewall direction**          | GitLab VM → OpenShift API (HTTPS/6443) — already open    | OpenShift → GitLab VM (SSH/22) — additional exposure             | N/A                                                                      |
-| **Cluster knowledge of GitLab** | None — cluster does not need to know GitLab exists       | Cluster holds SSH credentials for an external VM                 | N/A                                                                      |
-| **Complexity**                  | Low — 20-line bash script, logs to journal               | Medium — CronJob installs SSH client at runtime, harder to audit | High — full GitLab containerisation out of scope                         |
-| **Production use**              | Standard pattern for external load balancers, HSMs, VMs  | Used but considered less clean due to SSH key sprawl             | Correct long-term architecture, not viable here                          |
+| **Firewall direction**          | GitLab VM → OpenShift API (HTTPS/6443): already open    | OpenShift → GitLab VM (SSH/22): additional exposure             | N/A                                                                      |
+| **Cluster knowledge of GitLab** | None: cluster does not need to know GitLab exists       | Cluster holds SSH credentials for an external VM                 | N/A                                                                      |
+| **Complexity**                  | Low: 20-line bash script, logs to journal               | Medium: CronJob installs SSH client at runtime, harder to audit | High: full GitLab containerisation out of scope                         |
+| **Fit for this lab**            | Good: narrow API access and no inbound SSH                | Poor: adds SSH keys and inbound access                            | Too large a change for this stage                                        |
 
-**Decision: Option 1.** The GitLab VM already has outbound HTTPS to the OpenShift API through `vmbr1`. The ServiceAccount token is scoped to `get` on exactly one Secret in one namespace. The cluster has no knowledge of the GitLab VM and no credentials that could be used to reach it. The script is minimal, runs as root via systemd, and logs every execution to the system journal.
+**Decision: Option 1.** The GitLab VM already has outbound HTTPS access to the OpenShift API through `vmbr1`. Its ServiceAccount can read one Secret in one namespace. OpenShift stores no credentials for connecting back to the VM, and the pull script logs each run to the system journal.
 
-Option 2 was rejected because storing SSH keys in cluster Secrets creates a lateral movement path from the cluster to the GitLab VM. Option 3 is the correct production architecture for a fully containerised environment but is out of scope for this infrastructure.
+I rejected Option 2 because an SSH key in the cluster would create a path back into the GitLab VM. Option 3 would require moving GitLab itself, which was outside this lab's scope.
 
 ### 1.3 GitOps Scope
 
-The infrastructure layer — cert-manager operator, ClusterIssuer, OAuth CR, RBAC, and namespace configuration — was applied directly with `oc apply` and is not currently managed by ArgoCD. This is intentional: bringing operators and cluster-scoped resources under GitOps requires sync wave ordering and a secrets management solution (SealedSecrets or external-secrets-operator) to avoid committing sensitive values to Git in plaintext. That work is deferred to a future target.
+I applied the cert-manager operator, ClusterIssuer, OAuth CR, RBAC, and namespace configuration directly with `oc apply`. Moving those cluster-scoped resources into ArgoCD also needs sync ordering and a way to manage secrets without committing plaintext values, so that work remains separate for now.
 
-Application workloads from Target 3 onward are deployed through GitOps. The infrastructure layer is managed directly. This hybrid model is standard practice — Terraform or Ansible for the infrastructure plane, GitOps for the application plane.
+Application workloads from Target 3 onward still go through GitOps. The cluster infrastructure in this lab is managed directly.
 
 These phases must be executed in sequence. Each is a prerequisite for the next.
 
@@ -60,7 +60,7 @@ Phase 6: First login + grant cluster-admin
 
 ```
   Lab Internal CA (ca.crt + ca.key)
-  ~/pki/ on jump VM — import once, keep as offline backup
+  ~/pki/ on jump VM: import once, keep as offline backup
            │
            │  imported as Kubernetes Secret
            ▼
@@ -109,20 +109,20 @@ Phase 6: First login + grant cluster-admin
 
 ## 3. Known Limitations
 
-These are accepted risks documented explicitly. They do not affect the correctness of the implementation for this environment but a production hardening review would address them.
+The lab works with these limitations, but they would need attention before production use.
 
 | #   | Limitation                                                                                                   | Impact                                                                                                                                                                           | Resolution Path                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | --- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Infrastructure layer (cert-manager, ClusterIssuer, OAuth CR, RBAC) applied via `oc apply` — not under GitOps | Cluster state can drift from documentation. Rebuild requires re-running all commands manually                                                                                    | Future target: commit all infra manifests to `cluster-configs/` in the GitOps repo with sync wave ordering and a secrets management solution (SealedSecrets or external-secrets-operator)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 2   | GitLab VM cert sync relies on a root-run systemd timer                                                       | The VM is responsible for kubeconfig security, timer health, and nginx reload correctness. Operational surface exists outside the cluster                                        | Accepted tradeoff for an external VM. Three potential hardening paths identified: <br>(1) Dedicated non-root user with a single narrow sudo rule for `gitlab-ctl hup nginx` only — <br>reduces attack surface, still requires privilege escalation for reload. <br>(2) Rootless Podman Quadlet for the pull and write steps — eliminates root for cert <br>retrieval but reload trigger remains unsolved with GitLab omnibus architecture. <br>(3) Migrate GitLab omnibus to rootless Podman Quadlets — cert-sync and GitLab nginx run <br>as Quadlets under the same user, sharing a Podman volume. SIGHUP sent between containers <br>rootlessly. Fully eliminates root requirement and resolves the limitation cleanly. <br>Equivalent to Option 3 from section 1.2 approached from the VM layer rather than <br>OpenShift. Deferred — out of scope for current infrastructure. |
-| 3   | ~~ServiceAccount token valid for 1 year — rotation is manual~~                                               | ~~Long-lived bearer token on VM filesystem is a security liability if the VM is compromised. Rotation depends on a calendar reminder — the automation is not fully closed-loop~~ | **Resolved:** The sync script rotates its own token on every run. On each execution the script uses the current token to request a fresh 24h bound token via `oc create token`, then atomically overwrites the kubeconfig via a temp file before proceeding. The token is never older than 30 minutes plus 24 hours. No manual rotation required. The Role was extended with `serviceaccounts/token: create` on `gitlab-cert-sync` to permit self-rotation.                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 1   | Infrastructure layer (cert-manager, ClusterIssuer, OAuth CR, RBAC) applied via `oc apply`: not under GitOps | Cluster state can drift from documentation. Rebuild requires re-running all commands manually                                                                                    | Future target: commit all infra manifests to `cluster-configs/` in the GitOps repo with sync wave ordering and a secrets management solution (SealedSecrets or external-secrets-operator)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 2   | GitLab VM cert sync relies on a root-run systemd timer                                                       | Kubeconfig storage, timer health, and nginx reloads are managed outside the cluster                                                        | Run the pull under a dedicated user and allow only the nginx reload through `sudo`, or move GitLab and the sync job into rootless Quadlets. Deferred for this lab. |
+| 3   | ~~ServiceAccount token valid for 1 year: rotation is manual~~                                               | ~~Long-lived bearer token on VM filesystem is a security liability if the VM is compromised. Rotation depends on a calendar reminder: the automation is not fully closed-loop~~ | **Resolved:** The sync script rotates its own token on every run. On each execution the script uses the current token to request a fresh 24h bound token via `oc create token`, then atomically overwrites the kubeconfig via a temp file before proceeding. The token is never older than 30 minutes plus 24 hours. No manual rotation required. The Role was extended with `serviceaccounts/token: create` on `gitlab-cert-sync` to permit self-rotation.                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4   | ~~CA private key stored on jump VM~~                                                                         | ~~If the jump VM is compromised, the CA signing capability is compromised and all issued certificates are untrusted~~                                                            | **Resolved:** `ca.key` was shredded from the jump VM after import into the cluster. The cluster Secret `lab-ca-keypair` in the `cert-manager` namespace is now the sole holder of the CA signing capability, access-controlled by Kubernetes RBAC. `ca.crt` remains on the jump VM as a public trust anchor for distribution only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 ---
 
-## 4. Phase 0 — Generate the Lab Internal CA
+## 4. Phase 0: Generate the Lab Internal CA
 
-The Lab Internal CA is generated once on the jump VM using OpenSSL. This CA is the root of trust for all internal certificates. After generation it is imported into cert-manager (Phase 1) and the private key is shredded from the jump VM — the cluster Secret becomes the sole holder.
+Generate the Lab Internal CA once on the jump VM, import it into cert-manager in Phase 1, and then remove the private key from the jump VM. After that, only the cluster Secret holds the signing key.
 
 ### 4.1 PKI Directory
 
@@ -158,12 +158,12 @@ Subject: C=BE, ST=Flemish Brabant, L=Leuven, O=Infrastructure Lab, CN=Lab Intern
 
 | File | Purpose |
 |---|---|
-| `ca.key` | CA private key — imported into cert-manager, then shredded from jump VM |
-| `ca.crt` | CA public certificate — distributed to all trusting systems |
+| `ca.key` | CA private key: imported into cert-manager, then shredded from jump VM |
+| `ca.crt` | CA public certificate: distributed to all trusting systems |
 
 ---
 
-## 5. Phase 1 — cert-manager Operator
+## 5. Phase 1: cert-manager Operator
 
 ### 4.1 Install via OLM
 
@@ -179,7 +179,7 @@ Create the operator namespace:
 oc new-project cert-manager-operator
 ```
 
-Create the OperatorGroup. The `targetNamespaces` scope is intentional — cert-manager's cluster-scoped resources (`ClusterIssuer`, `Certificate` CRDs) are registered separately and do not require a cluster-scoped OperatorGroup:
+Create the OperatorGroup. The `targetNamespaces` scope is intentional: cert-manager's cluster-scoped resources (`ClusterIssuer`, `Certificate` CRDs) are registered separately and do not require a cluster-scoped OperatorGroup:
 
 ```bash
 cat << 'EOF' | oc apply -f -
@@ -232,7 +232,7 @@ Verify the three operand pods are running in the `cert-manager` namespace (note:
 oc get pods -n cert-manager
 ```
 
-Expected — all three must be `Running` before proceeding:
+Expected: all three must be `Running` before proceeding:
 ```
 NAME                                       READY   STATUS
 cert-manager-xxxxxxxxxx-xxxxx              1/1     Running
@@ -241,8 +241,8 @@ cert-manager-webhook-xxxxxxxxxx-xxxxx      1/1     Running
 ```
 
 > [!note] Two Namespaces
-> `cert-manager-operator` — OLM manages the operator here.
-> `cert-manager` — the operator runs the controller, cainjector, and webhook here. CA Secrets referenced by ClusterIssuers must live in `cert-manager`.
+> `cert-manager-operator`: OLM manages the operator here.
+> `cert-manager`: the operator runs the controller, cainjector, and webhook here. CA Secrets referenced by ClusterIssuers must live in `cert-manager`.
 
 ### 4.3 Import the Lab Internal CA
 
@@ -284,11 +284,11 @@ NAME                READY   STATUS                AGE
 lab-internal-ca   True    Signing CA verified   Xs
 ```
 
-If `READY` is `False`, check `oc describe clusterissuer lab-internal-ca` — the condition message will identify whether the issue is the Secret namespace, PEM formatting, or a webhook timeout.
+If `READY` is `False`, check `oc describe clusterissuer lab-internal-ca`: the condition message will identify whether the issue is the Secret namespace, PEM formatting, or a webhook timeout.
 
 ---
 
-## 6. Phase 2 — Wildcard Certificate for OpenShift Ingress
+## 6. Phase 2: Wildcard Certificate for OpenShift Ingress
 
 ### 5.1 Issue the Certificate
 
@@ -319,7 +319,7 @@ EOF
 `renewBefore: 720h` triggers renewal 30 days before expiry. cert-manager's default validity is 90 days, so renewal occurs at day 60.
 
 > [!note] rotationPolicy warning
-> cert-manager v1.18+ logs a warning if `spec.privateKey.rotationPolicy` is not set, as the default changed from `Never` to `Always` in this version. This is informational — `Always` means the private key is rotated on each renewal, which is correct practice.
+> cert-manager v1.18+ logs a warning if `spec.privateKey.rotationPolicy` is not set, as the default changed from `Never` to `Always` in this version. This is informational: `Always` means the private key is rotated on each renewal, which is correct practice.
 
 Verify issuance:
 
@@ -362,7 +362,7 @@ oc patch proxy/cluster \
   --patch='{"spec": {"trustedCA": {"name": "lab-ca-bundle"}}}'
 ```
 
-Wait for the authentication operator to recover — it will roll its pods to pick up the new trust bundle:
+Wait for the authentication operator to recover: it will roll its pods to pick up the new trust bundle:
 
 ```bash
 oc get clusteroperators authentication -w
@@ -376,7 +376,7 @@ Then verify all operators are healthy:
 oc get clusteroperators | grep -v "True.*False.*False"
 ```
 
-Expected: no output — only the header line.
+Expected: the header line only.
 
 ### 5.4 Verify the Certificate is Served
 
@@ -395,7 +395,7 @@ X509v3 Subject Alternative Name: critical
 
 ---
 
-## 7. Phase 3 — GitLab Certificate Automation (Pull-Based Agent)
+## 7. Phase 3: GitLab Certificate Automation (Pull-Based Agent)
 
 cert-manager issues and auto-renews the GitLab certificate as a Kubernetes Secret. A systemd timer on the GitLab VM pulls the current cert from the OpenShift API on a 30-minute schedule and reloads nginx. No manual certificate operations are required after initial setup.
 
@@ -607,7 +607,7 @@ oc --kubeconfig="${KUBECONFIG}" \
 chmod 600 "${CERT_DIR}/gitlab.lab.example.internal.key"
 chmod 644 "${CERT_DIR}/gitlab.lab.example.internal.crt"
 
-# Rotate the token — request a fresh 24h token using the current token
+# Rotate the token: request a fresh 24h token using the current token
 NEW_TOKEN=$(oc --kubeconfig="${KUBECONFIG}" \
   create token gitlab-cert-sync \
   -n "${NAMESPACE}" \
@@ -785,10 +785,10 @@ Expected: `Health: Healthy`
 
 ---
 
-## 8. Phase 4 — GitLab OAuth Application
+## 8. Phase 4: GitLab OAuth Application
 
 > [!note] TLS Prerequisite
-> OAuth redirect flows carry authorization codes in the URL. All OAuth endpoints must serve HTTPS — this is why Phase 2 (GitLab HTTPS) and Phase 3 (wildcard certificate) must be completed before configuring the identity provider.
+> OAuth redirect flows carry authorization codes in the URL. All OAuth endpoints must serve HTTPS: this is why Phase 2 (GitLab HTTPS) and Phase 3 (wildcard certificate) must be completed before configuring the identity provider.
 
 ### 7.1 Create Instance OAuth Application
 
@@ -807,14 +807,14 @@ The callback URL format is fixed by OpenShift:
 https://oauth-openshift.apps.<cluster-name>.<base-domain>/oauth2callback/<idp-name>
 ```
 
-GitLab provides an **Application ID** (Client ID) and **Secret** after saving — copy both immediately, the secret is shown only once.
+GitLab shows an **Application ID** (Client ID) and **Secret** after saving. Copy both immediately because the secret is shown only once.
 
 > [!note] Trusted application
-> Checking **Trusted** skips the OAuth consent screen for users. Without this, every user sees "OpenShift wants to access your GitLab account — Allow?" on first login.
+> Checking **Trusted** skips the OAuth consent screen for users. Without this, every user sees "OpenShift wants to access your GitLab account: Allow?" on first login.
 
 ---
 
-## 9. Phase 5 — OpenShift OAuth Configuration
+## 9. Phase 5: OpenShift OAuth Configuration
 
 ### 8.1 Create the Client Secret
 
@@ -879,7 +879,7 @@ The `oauth-openshift` pods restart automatically to pick up the new configuratio
 
 ---
 
-## 10. Phase 6 — Grant cluster-admin via RBAC
+## 10. Phase 6: Grant cluster-admin via RBAC
 
 ### 9.1 Log in via GitLab
 
@@ -897,7 +897,7 @@ NAME                UID                                    FULL NAME           I
 YOUR_GITLAB_USER   00000000-0000-0000-0000-000000000000   Example User       gitlab:42
 ```
 
-`IDENTITIES` shows `gitlab:42` — authenticated via the GitLab IDP with example user ID 42.
+`IDENTITIES` shows `gitlab:42`: authenticated via the GitLab IDP with example user ID 42.
 
 > [!warning] Username case sensitivity
 > OpenShift User objects are created with the exact username returned by the identity provider. GitLab returns the configured username. The `oc adm policy` command must use the exact same case.
@@ -948,7 +948,7 @@ sudo update-ca-trust
 
 1. Navigate to `https://console-openshift-console.apps.lab.example.internal`
 2. Two login options appear: `kube:admin` and `gitlab`
-3. Click `gitlab` — browser redirects to `https://gitlab.lab.example.internal`
+3. Click `gitlab`: browser redirects to `https://gitlab.lab.example.internal`
 4. GitLab authenticates the user
 5. Browser redirects back to OpenShift console
 6. User is logged in with their GitLab username
@@ -1011,19 +1011,19 @@ Expected: `Token rotated successfully`
 | Issue | Cause | Fix |
 |---|---|---|
 | ClusterIssuer `READY: False` | Secret in wrong namespace or bad PEM | Verify `lab-ca-keypair` is in `cert-manager` namespace. Check `oc describe clusterissuer lab-internal-ca`. |
-| Certificate stuck `READY: False` | ClusterIssuer name mismatch or webhook timeout | `oc describe certificate <name> -n <ns>` — check Events. |
+| Certificate stuck `READY: False` | ClusterIssuer name mismatch or webhook timeout | `oc describe certificate <name> -n <ns>`: check Events. |
 | Router still serving old cert | IngressController patch not applied or pod not rolled | Verify: `oc get ingresscontroller default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate}'`. Check rollout status. |
 | `oc` not found under sudo | `/usr/local/bin` not in sudo secure path | `sudo ln -s /usr/local/bin/oc /usr/bin/oc` |
-| Sync script permission denied on kubeconfig | `gitlab` user can't read root-owned file | Expected — the systemd service runs as root. Test with `sudo oc --kubeconfig=...`. |
-| `oc create token` — token approach broken | Using old `sa.secrets[0].name` pattern | Use `oc create token gitlab-cert-sync -n lab-infra --duration=8760h` |
+| Sync script permission denied on kubeconfig | `gitlab` user can't read root-owned file | Expected: the systemd service runs as root. Test with `sudo oc --kubeconfig=...`. |
+| `oc create token`: token approach broken | Using old `sa.secrets[0].name` pattern | Use `oc create token gitlab-cert-sync -n lab-infra --duration=8760h` |
 | nginx serving old cert after sync | Serials mismatch between file and live | `sudo systemctl start gitlab-cert-sync.service` then compare serials. |
 | GitLab cert browser warning | CA not in Windows trust store | Install `ca.crt` into Trusted Root Certification Authorities (Section 9.1). |
-| `authentication` operator `RouterCertsDegraded` | Lab Internal CA not in cluster proxy trust bundle — internal components cannot validate the wildcard cert on the router | Add CA to proxy trust bundle: `oc create configmap lab-ca-bundle --from-file=ca-bundle.crt=$HOME/pki/ca.crt -n openshift-config` then patch `proxy/cluster` with `trustedCA.name: lab-ca-bundle`. Wait 2-3 minutes for OAuth pods to roll. |
+| `authentication` operator `RouterCertsDegraded` | Lab Internal CA not in cluster proxy trust bundle: internal components cannot validate the wildcard cert on the router | Add CA to proxy trust bundle: `oc create configmap lab-ca-bundle --from-file=ca-bundle.crt=$HOME/pki/ca.crt -n openshift-config` then patch `proxy/cluster` with `trustedCA.name: lab-ca-bundle`. Wait 2-3 minutes for OAuth pods to roll. |
 | OAuth `redirect_uri_mismatch` | Callback URL mismatch | Verify callback URL in GitLab application exactly matches OCP OAuth server URL. |
 | `certificate signed by unknown authority` in OAuth pod | CA not in `gitlab-ca` ConfigMap | Verify ConfigMap in `openshift-config` namespace contains correct CA cert. |
 | ArgoCD repo fails after HTTPS change | CA not in ArgoCD trust store | Verify `argocd-tls-certs-cm` ConfigMap in `openshift-gitops` namespace. |
 | User object not created | User never logged in | First login via GitLab triggers User object creation. |
-| `cluster-admin` not working | Wrong username case | `oc get users` — use exact username. OpenShift is case sensitive. |
+| `cluster-admin` not working | Wrong username case | `oc get users`: use exact username. OpenShift is case sensitive. |
 
 ---
 
@@ -1031,13 +1031,13 @@ Expected: `Token rotated successfully`
 
 | Resource | Name | Namespace | Purpose |
 |---|---|---|---|
-| Operator namespace | `cert-manager-operator` | — | OLM manages operator here |
-| cert-manager control plane | `cert-manager` | — | Controller, cainjector, webhook |
+| Operator namespace | `cert-manager-operator` | - | OLM manages operator here |
+| cert-manager control plane | `cert-manager` | - | Controller, cainjector, webhook |
 | CA Secret | `lab-ca-keypair` | `cert-manager` | Lab Internal CA key pair |
 | ClusterIssuer | `lab-internal-ca` | cluster-scoped | Signs all leaf certificates |
 | Wildcard Certificate CR | `wildcard-apps-stage` | `openshift-ingress` | Issues wildcard TLS Secret |
 | Wildcard TLS Secret | `wildcard-apps-stage-tls` | `openshift-ingress` | Used by IngressController |
-| GitLab namespace | `lab-infra` | — | GitLab cert and sync SA |
+| GitLab namespace | `lab-infra` | - | GitLab cert and sync SA |
 | GitLab Certificate CR | `gitlab-local-internal` | `lab-infra` | Issues GitLab TLS Secret |
 | GitLab TLS Secret | `gitlab-tls` | `lab-infra` | Pulled by sync agent |
 | GitLab sync ServiceAccount | `gitlab-cert-sync` | `lab-infra` | Read-only access to gitlab-tls |
@@ -1045,7 +1045,7 @@ Expected: `Token rotated successfully`
 | GitLab kubeconfig | `/etc/gitlab/cert-sync/kubeconfig` | on GitLab VM | SA token + cluster CA |
 | GitLab sync script | `/usr/local/bin/gitlab-cert-sync.sh` | on GitLab VM | Pulls cert, reloads nginx |
 | GitLab TLS cert dir | `/etc/gitlab/ssl/` | on GitLab VM | nginx reads certs here |
-| Proxy CA bundle | `lab-ca-bundle` | `openshift-config` | Injects Lab Internal CA into cluster proxy trust bundle — required for internal components to trust the wildcard cert |
+| Proxy CA bundle | `lab-ca-bundle` | `openshift-config` | Injects Lab Internal CA into cluster proxy trust bundle: required for internal components to trust the wildcard cert |
 | OAuth CR | `cluster` | `openshift-config` | Cluster-wide OAuth config |
 | Client secret | `gitlab-client-secret` | `openshift-config` | GitLab OAuth app secret |
 | CA ConfigMap (OAuth) | `gitlab-ca` | `openshift-config` | CA trust for OAuth server |
@@ -1062,7 +1062,7 @@ Expected: `Token rotated successfully`
 * **[2] Configuring Ingress Certificates**
   https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/security_and_compliance/configuring-certificates
 
-* **[3] cert-manager ClusterIssuer — CA Issuer**
+* **[3] cert-manager ClusterIssuer: CA Issuer**
   https://cert-manager.io/docs/configuration/ca/
 
 * **[4] Configuring a GitLab Identity Provider**

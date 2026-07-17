@@ -1,31 +1,31 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
 
-## Target 1: Install a Single Node OpenShift
+# Target 1: Install Single Node OpenShift on Proxmox
 
-**Objective:** Install a production-grade Single Node OpenShift (SNO) 4.21 cluster on Bare Metal-as-a-Service (MaaS) infrastructure.
+**Objective:** Install a Single Node OpenShift (SNO) 4.21 cluster on the Proxmox lab.
 **Target Environment:** Virtualized lab infrastructure
 **Topology:** Control Plane and Worker nodes combined onto a single physical machine.
 
 ---
 
-## 1. Minimum Production Requirements
+## 1. Minimum requirements
 
-Before beginning, ensure your server meets the minimum production-grade specifications for OpenShift 4.21:
+The SNO VM needs at least:
 
 - **CPU:** Minimum 8 vCPUs (16+ recommended for production workloads).
 - **RAM:** Minimum 16 GB (64 GB recommended).
-- **Storage:** 120 GB minimum with high IOPS (strictly required for the `etcd` database — see storage warning below).
+- **Storage:** 120 GB minimum with high IOPS (strictly required for the `etcd` database: see storage warning below).
 - **Network:** 1 static public/private IP address assigned to the server.
 
-> [!danger] Storage Performance is Critical
-> etcd requires a minimum of ~50 MB/s sequential write speed with `dsync`. On Proxmox, **qcow2 images on directory-based (`local`) storage** deliver ~2 MB/s dsync writes — far too slow. This causes the bootstrap kube-apiserver to fail its startup probes because RBAC data cannot be persisted to etcd in time.
+> [!danger] Storage performance matters
+> etcd requires a minimum of ~50 MB/s sequential write speed with `dsync`. On Proxmox, **qcow2 images on directory-based (`local`) storage** deliver ~2 MB/s dsync writes: far too slow. This causes the bootstrap kube-apiserver to fail its startup probes because RBAC data cannot be persisted to etcd in time.
 >
 > **Use LVM thin provisioning** for the VM disk. Raw volumes on LVM deliver ~1.5 GB/s, which is more than sufficient.
 >
 > Test with: `dd if=/dev/zero of=/tmp/testfile bs=4k count=1000 oflag=dsync`
 
-We will be using an **Admin Workstation** (a local machine or jump-host VM) with:
+The admin workstation or jump VM needs:
 
 - `openshift-install` binary (v4.21).
 - `coreos-installer` tool.
@@ -36,9 +36,9 @@ We will be using an **Admin Workstation** (a local machine or jump-host VM) with
 
 ## 2. Step 1: DNS Planning and Configuration
 
-OpenShift relies heavily on internal cluster DNS to route traffic between microservices and the API. These records must be resolvable by the MaaS server _before_ booting the installation media.
+OpenShift needs its API and application hostnames to resolve before the installation media boots.
 
-Configure the following records in your DNS provider/internal BIND:
+Add these records to the internal BIND server:
 
 | **Record Type**  | **Name (cluster: stage-project, domain: example.internal)** | **Target IP** | **Purpose**                                         |
 | ---------------- | --------------------------------------------------------- | ------------- | --------------------------------------------------- |
@@ -48,7 +48,7 @@ Configure the following records in your DNS provider/internal BIND:
 
 ### 2.1 DHCP Static Reservation (`dnsmasq`)
 
-To ensure the SNO node always receives `192.168.50.20`, we map its MAC address in the DHCP server.
+Reserve `192.168.50.20` for the SNO node's MAC address.
 
 1. Identify the VM MAC address in the Proxmox Hardware tab.
 2. Add the host entry to your DHCP configuration:
@@ -66,7 +66,7 @@ systemctl restart dnsmasq
 
 ### 2.2 Proxmox Firewall Toggle
 
-**Crucial:** Proxmox's default firewall drops DHCP and internal OVN-Kubernetes traffic.
+The Proxmox firewall must be disabled on this VM because the lab's default rules drop DHCP and internal OVN-Kubernetes traffic.
 
 - **Action:** Proxmox GUI → SNO VM → **Hardware** → **Network Device** → Uncheck **Firewall**.
 
@@ -74,7 +74,7 @@ systemctl restart dnsmasq
 
 ### 2.3 DNS Server Configuration (BIND9)
 
-OpenShift strictly requires specific FQDNs to resolve to the node IP (`192.168.50.20`) to allow the API and application ingress to function.
+The API and application FQDNs must resolve to the node IP (`192.168.50.20`).
 
 #### 2.4 Global Options (`/etc/named.conf`)
 
@@ -194,7 +194,7 @@ sshKey: 'ssh-rsa AAAAB3NzaC1...'
 ```
 
 > [!note] `installationDisk: /dev/sda`
-> This tells `coreos-installer` where to write the final OS — it is **not** the boot source. The VM boots from the ISO in RAM; `/dev/sda` must be a blank, unmounted disk at install time.
+> This tells `coreos-installer` where to write the final OS: it is **not** the boot source. The VM boots from the ISO in RAM; `/dev/sda` must be a blank, unmounted disk at install time.
 
 ---
 
@@ -215,7 +215,7 @@ This generates a `bootstrap-in-place-for-live-iso.ign` file, alongside an `auth/
 > [!danger] Critical: Use `--live-ignition`, NOT `--dest-ignition`
 > The bootstrap-in-place flow **must** run entirely in the live ISO environment (in RAM). The ignition config must be embedded as a **live ignition** so the full bootstrap process (bootkube, MCS, `install-to-disk.service`) executes while `/dev/sda` is unmounted.
 >
-> Using `--dest-ignition` instead embeds the ignition into the installed OS on disk. This causes `install-to-disk.service` to fail with `"Error: checking for exclusive access to /dev/sda — found busy partitions"` because the OS is already running from the disk it needs to overwrite.
+> Using `--dest-ignition` instead embeds the ignition into the installed OS on disk. This causes `install-to-disk.service` to fail with `"Error: checking for exclusive access to /dev/sda: found busy partitions"` because the OS is already running from the disk it needs to overwrite.
 
 ```bash
 coreos-installer iso customize \
@@ -233,11 +233,11 @@ coreos-installer iso customize \
 
 The SNO bootstrap-in-place flow has two distinct phases:
 
-**Phase 1 — Live ISO (runs in RAM):**
+**Phase 1: Live ISO (runs in RAM):**
 
 1. VM boots ISO into RAM
 2. RHCOS live environment starts
-3. Live ignition config loads — bootstrap services begin
+3. Live ignition config loads: bootstrap services begin
 4. `bootkube.service` starts: renders manifests, starts bootstrap etcd + kube-apiserver
 5. Bootstrap kube-apiserver comes up, cluster resources are created
 6. MCS (Machine Config Server) renders and serves the permanent node config
@@ -245,12 +245,12 @@ The SNO bootstrap-in-place flow has two distinct phases:
 8. `install-to-disk.service` writes RHCOS + permanent ignition (master.ign) to `/dev/sda`
 9. Node reboots (with 60-second countdown)
 
-**Phase 2 — Permanent OS (boots from disk):**
+**Phase 2: Permanent OS (boots from disk):**
 
 10. VM boots from `/dev/sda`
 11. Ignition runs on first boot,
 12. applies full machine config
-13. `machine-config-daemon-firstboot.service` runs — applies OS config, pulls images
+13. `machine-config-daemon-firstboot.service` runs: applies OS config, pulls images
 14. Node reboots once more after MCD firstboot completes
 15. Permanent control plane starts (etcd, kube-apiserver, kube-controller-manager, kube-scheduler)
 16. Cluster operators deploy and stabilize
@@ -297,7 +297,7 @@ pvesm status
 
 #### 6.1 Secure Copy (SCP) to the Host
 
-Route the transfer over the internal LAN bridge for maximum speed and to avoid NAT reflection issues:
+Copy the ISO over the internal LAN bridge. This is faster and avoids NAT reflection problems:
 
 ```bash
 scp sno-installer.iso root@192.168.50.1:/var/lib/vz/template/iso/
@@ -308,7 +308,7 @@ scp sno-installer.iso root@192.168.50.1:/var/lib/vz/template/iso/
 
 #### 6.2 Create and Configure the VM in Proxmox
 
-Provision the target VM with the following settings:
+Create the VM with these settings:
 
 | **Setting**         | **Value**                                      |
 | ------------------- | ---------------------------------------------- |
@@ -328,7 +328,7 @@ Provision the target VM with the following settings:
 > [!danger] Critical: ISO Ejection During Reboot
 > The bootstrap-in-place flow ends with `install-to-disk.service` writing the permanent OS to `/dev/sda` and scheduling a reboot with a 60-second countdown. During this window, you **must** eject the ISO so the VM boots from disk on the next reboot. If the ISO is still attached, the VM will boot the ISO again and overwrite the permanent OS.
 
-**Step-by-step procedure:**
+**Procedure:**
 
 1. **Set boot order** to CD-ROM (ide2) first, then hard disk (scsi0):
    ```bash
@@ -391,14 +391,14 @@ Then repeat from step 6.3.
 
 #### 7.1 Enable Logging (Before Starting the VM)
 
-**On the Proxmox host** — watch outbound NAT traffic:
+**On the Proxmox host**: watch outbound NAT traffic:
 
 ```bash
 iptables -t nat -I POSTROUTING 1 -s 192.168.50.0/24 -o vmbr0 -j LOG --log-prefix "NAT-EGRESS: "
 journalctl -k -f | grep "NAT-EGRESS"
 ```
 
-**On the BIND DNS VM (192.168.50.10)** — watch DNS queries:
+**On the BIND DNS VM (192.168.50.10)**: watch DNS queries:
 
 ```bash
 sudo rndc querylog on
@@ -546,7 +546,7 @@ oc get csr | grep Pending | awk '{print $1}' | xargs oc adm certificate approve
 | **Issue**                          | **Symptoms**                                                                                                                              | **Fix**                                                                                                                                                                |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Disk I/O too slow for etcd         | Bootstrap kube-apiserver startup probes fail with HTTP 500, `poststarthook/rbac/bootstrap-roles failed`. `dd oflag=dsync` shows < 10 MB/s | Move VM disk to LVM thin storage. Do not use qcow2-on-directory.                                                                                                       |
-| `install-to-disk` busy partitions  | `Error: checking for exclusive access to /dev/sda — found busy partitions: /dev/sda3 mounted on /boot, /dev/sda4 mounted on /sysroot`     | ISO was built with `--dest-ignition`. Rebuild with `--live-ignition` so bootstrap runs in RAM.                                                                         |
+| `install-to-disk` busy partitions  | `Error: checking for exclusive access to /dev/sda: found busy partitions: /dev/sda3 mounted on /boot, /dev/sda4 mounted on /sysroot`     | ISO was built with `--dest-ignition`. Rebuild with `--live-ignition` so bootstrap runs in RAM.                                                                         |
 | ISO overwrites permanent install   | After `install-to-disk` completes and reboots, the ISO boots again and `coreos-installer` rewrites the disk                               | Eject the ISO during the 60-second reboot countdown: `qm set <VMID> --ide2 none,media=cdrom`                                                                           |
 | MCD firstboot service missing      | `machine-config-daemon-firstboot.service` not found, `/etc/kubernetes/manifests/` empty or missing                                        | The permanent ignition was not applied. Usually caused by `--dest-ignition` or ISO rebooting over the permanent install. Rebuild with `--live-ignition` and eject ISO. |
 | Ignition skipped (first-boot lost) | Node idle, no bootstrap services, logs show `ConditionFirstBoot=true` skipped                                                             | Only applies to `--dest-ignition` flow. With `--live-ignition`, this is not an issue. If using dest-ignition: wipe disk, boot ISO once, immediately flip boot order.   |
@@ -561,7 +561,7 @@ oc get csr | grep Pending | awk '{print $1}' | xargs oc adm certificate approve
 
 ## 11. Official References & Documentation Sources
 
-* **[1] Installing a Cluster on a Single Node (SNO) — Overview**
+* **[1] Installing a Cluster on a Single Node (SNO): Overview**
   https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html-single/installing_on_a_single_node/index
 
 * **[2] Networking and DNS Requirements for SNO**

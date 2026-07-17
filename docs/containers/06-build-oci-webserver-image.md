@@ -1,10 +1,11 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
 
-# Build an OCI-Compliant Flask Webserver Image
+# Build an OCI-Compatible Flask Web Server Image
 
 ## Goal
-Build a minimal Flask-based webserver image using a fully qualified Python base image and publish it to an OCI-compliant registry.  
+
+Build a small Flask image from a fully qualified Python base image, test it with Podman, and publish it to an OCI-compatible registry.
 
 
 ---
@@ -39,11 +40,10 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
 
 ```
-1) We import the Flask class and create an instance called ``app``
-	``__name__`` tells Flask where to look for resources
-2) ``@app.route("/")`` tells the application that when a request comines in for the root URL / send it to the ``hello()`` function
-3) if __name__ == "__main__": ensures the web server only starts if you run the script directly
-4) ``host="0.0.0.0":`` Listens to connections coming from anywhere
+1. `Flask(__name__)` creates the application and tells Flask where to find its resources.
+2. `@app.route("/")` sends requests for `/` to `hello()`.
+3. The `if __name__ == "__main__"` guard starts the server only when the script is run directly.
+4. `host="0.0.0.0"` listens on every container interface.
 
 ## 
 
@@ -210,25 +210,11 @@ Copying blob b7b5a65d135c skipped: already exists
 Copying config b28a2d6b86 done   |
 Writing manifest to image destination
 ```
-Note: podman push was run twice, it failed initially because quay.io did not create the repository immediately!
+The first push failed because the Quay repository was not available immediately after creation. Running the push again succeeded.
 
 ## Sources
 
-  
-
-1. **Flask Official Documentation:** Describes how to create a simple web app and run it with `app.run()`.  
-
-    [https://flask.palletsprojects.com/en/stable/quickstart/](https://flask.palletsprojects.com/en/stable/quickstart/)
-
-2. **Docker Official Docs:** Demonstrates containerizing Python + Flask applications and explains each Dockerfile instruction.  
-
-    [https://docs.docker.com/language/python/build-images/](https://docs.docker.com/language/python/build-images/)
-
-3. **Red Hat Podman Guide:** Confirms that Podman can build and run OCI images directly from Dockerfiles.  
-
-	[Chapter 1. Starting with containers | Building, running, and managing containers | Red Hat Enterprise Linux | 9 | Red Hat Documentation](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/building_running_and_managing_containers/assembly_starting-with-containers_building-running-and-managing-containers)
-
-
-4. **Open Container Initiative (OCI):** Defines the image specification used by both Docker and Podman.  
-
-   🔗[OCI Explained: How Docker and Podman Speak the Same Container Language With Examples | by Sachin Sampras M | Medium](https://medium.com/@sampras343/oci-explained-how-docker-and-podman-speak-the-same-container-language-with-examples-5d997515c14d)
+- [Flask Quickstart](https://flask.palletsprojects.com/en/stable/quickstart/)
+- [Docker: Containerize a Python application](https://docs.docker.com/language/python/build-images/)
+- [Red Hat: Starting with containers](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/building_running_and_managing_containers/assembly_starting-with-containers_building-running-and-managing-containers)
+- [Open Container Initiative](https://opencontainers.org/)

@@ -1,16 +1,15 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
 
-# Target 1 — Install Docker on Debian/Ubuntu
+# Target 1: Install Docker on Debian or Ubuntu
 
 ## Goal
-Install Docker Engine on a fresh Debian/Ubuntu virtual machine using best practices.  
-The installation must work for a non-privileged user who can run containers without sudo.
+
+Install Docker Engine on a fresh Debian or Ubuntu VM, then give a regular user permission to run containers without `sudo`.
 
 ## 1. Create the VM
 
-Use any hypervisor (VirtualBox, VMware, Proxmox).  
-The following settings are recommended:
+Use any convenient hypervisor. These settings are enough for the lab:
 
 - **OS:** Ubuntu Server 24.04 LTS or Debian 13  
 - **vCPUs:** 2  
@@ -20,14 +19,7 @@ The following settings are recommended:
 - **Boot mode:** UEFI  
 - **Networking:** NAT or Bridged  
 
-During installation:
-
-- Enable *OpenSSH Server* if you plan to connect remotely.
-
-After installation:
-
-- Shut down the VM.
-- Take a snapshot named `clean-install`.
+Enable *OpenSSH Server* during installation if you plan to connect remotely. When the installation is finished, shut down the VM and take a snapshot named `clean-install`.
 
 ## 2. Update the System
 
@@ -35,7 +27,7 @@ After installation:
 sudo apt update && sudo apt upgrade -y
 ```
 
-## 3. Install/Enable Docker Engine
+## 3. Install Docker Engine
 ```bash
 ##Install
 sudo apt install -y ca-certificates curl gnupg lsb-release
@@ -72,8 +64,7 @@ sudo docker run --rm hello-world
 
 ## 4. Create a Non-Privileged User for Docker
 
-Running containers directly as root is unsafe.  
-Instead, assign Docker privileges through group membership.
+Add the lab user to the `docker` group so Docker can be used without `sudo`. Membership in this group is effectively root access, so grant it only to trusted users.
 
 ```bash
 ##Create the user

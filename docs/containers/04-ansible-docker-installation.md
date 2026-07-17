@@ -1,13 +1,15 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
+
+# Install Docker with Ansible
 
 ## Goal
 
-Automate the installation of Docker using Ansible following best practices:
+Install Docker on Debian and Ubuntu hosts with a small, reusable Ansible role.
 
 ---
 
-# 1. Project Structure
+## 1. Project structure
 ```bash
 Layout:
 ansible/  
@@ -22,16 +24,16 @@ ansible/
 ├── tasks/main.yml  
 └── templates/
 
-### Why this structure?
+### Why use this layout?
 - variables are separated cleanly  
 - role is reusable across hosts  
 - inventory file stays minimal  
 - ansible.cfg stays project-local (not system-wide)  
 ```
 
-# 2. ansible.cfg (Local Configuration)
+## 2. Local Ansible configuration
 
-Place this file in the ansible/ directory: 
+Place this file in the `ansible/` directory:
 
 ```
 [defaults]
@@ -47,9 +49,7 @@ become = True
 
 ```
 
-`pipelining=True` improves performance.
-Using a **local** config file prevents interference with global settings.
-note: best-practice would be to have become=true local in the play that needs it.
+`pipelining=True` reduces SSH round trips. A project-local configuration also avoids changing the system-wide Ansible setup. In a larger project, set `become: true` only on the plays or tasks that need it.
 
 ## 3. Inventory (inventory.ini)
 ```
@@ -57,7 +57,7 @@ note: best-practice would be to have become=true local in the play that needs it
 host_ubuntu ansible_host=127.0.0.1 ansible_port=2222
 host_debian ansible_host=127.0.0.1 ansible_port=2223
 ```
-All variables go to `group_vars` or `host_vars`
+Keep host and group settings in `host_vars` or `group_vars`.
 
 ## 4. Group Variables (group_vars/docker_hosts.yml)
 ```
@@ -139,7 +139,7 @@ defaults (`roles/install_docker/defaults/main.yml`)
     - install_docker
 ```
 
-## 8. Running the Automation
+## 8. Run the automation
 ```
 ansible -m ansible.builtin.ping docker_hosts
 ansible-playbook site.yml

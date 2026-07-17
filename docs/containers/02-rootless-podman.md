@@ -1,11 +1,11 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
 
-# Target 2  Configure Podman in Rootless Mode
+# Target 2: Configure Rootless Podman
 
 ## Goal
-Install Podman and configure it so a **non-privileged user** can run containers securely in rootless mode.  
-Rootless Podman reduces host risk by ensuring container “root” is mapped to an unprivileged host UID.
+
+Install Podman for an unprivileged user. In rootless mode, the container's `root` account maps to an unprivileged host UID instead of the host's real root account.
 
 ---
 
@@ -16,11 +16,11 @@ sudo apt update
 sudo apt install -y podman uidmap slirp4netns
 ```
 
-## 2. Ensure Subordinate UID/GID Ranges Exist
+## 2. Check the subordinate UID and GID ranges
 
 Podman needs a UID/GID range in `/etc/subuid` and `/etc/subgid` to map container identities.
 
-On modern Ubuntu/Debian, `adduser` **usually** creates these lines automatically:
+Current Debian and Ubuntu releases normally add these mappings when the user is created. Check before adding them manually:
 
 ```bash
 ##Example mapping
@@ -45,11 +45,9 @@ podman run --rm hello-world
 podman run -it --rm debian bash
 ```
 
-## 4. Systemd warning when using su
+## 4. Avoid the systemd warning caused by `su`
 
-A warning may appear stating ``Falling back to cgroupfs``
-This is due to using ``su`` which does not create an user-level systemd session
-Solution:
+A plain `su` session may produce a `Falling back to cgroupfs` warning because it does not create a user systemd session. Use a PAM-backed login or SSH when systemd integration is required:
 ```bash
 sudo -iu labuser
 ## Opens a real login session handled by systemd + PAM
@@ -58,8 +56,7 @@ sudo -iu labuser
 
 ## 5. Container Isolation: Default vs. Private User Namespaces
 
-By default, **rootless containers started by the same user share one user namespace**.  
-This protects the host but allows potential lateral movement between containers.
+By default, rootless containers started by one user share that user's namespace. This protects the host, but it provides less separation between those containers.
 
 ```bash
 labuser userns
@@ -68,9 +65,9 @@ labuser userns
 ## Shared namespace --> Shared attack surface
 ```
 
-#### **Improving isolation: Rootless --userns=auto**
+### Give each container its own mapping
 
-To give each container its **own** UID/GID mapping:
+Use `--userns=auto` to allocate a separate UID/GID mapping for each container:
 ```bash
 podman run --userns=auto -it alpine sh
 
