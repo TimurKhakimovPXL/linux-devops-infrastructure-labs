@@ -1,10 +1,10 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
 
-## Target 5: Deploy a Static Website via GitOps
+# Target 5: Deploy a Static Website via GitOps
 
-**Objective:** Deploy a static website served by nginx with a custom `index.html` mounted via a ConfigMap, expose it through a re-encrypt Route secured with a service serving certificate, store all manifests in the GitLab repository, and deploy via the ArgoCD pipeline from Target 3.
-**Target Environment:** Single Node OpenShift lab -- Single Node OpenShift 4.21
+**Objective:** Deploy an nginx static site from Git with ArgoCD, and expose it through a re-encrypt Route backed by an OpenShift service certificate.
+**Target Environment:** Single Node OpenShift 4.21 lab
 **GitLab Repository:** `https://gitlab.lab.example.internal/YOUR_GITLAB_USER/openshift-gitops.git`
 **nginx Image:** `registry.access.redhat.com/ubi10/nginx-126@sha256:5f7981bbd959e58e3fac0b0a1920b3e0954959cc963b495b9a4606a5a09d9dea`
 
@@ -27,7 +27,7 @@ Sync: Synced, Health: Healthy
 ```
 
 > [!warning] Pre-flight: ArgoCD HTTP/HTTPS mismatch
-> After Target 4 switched GitLab to HTTPS, the `sample-app` Application CR may still contain the old HTTP `repoURL`. The Secret was updated in Target 4 but the Application CR was not. If you see `ComparisonError: dial tcp 192.168.50.30:80`, run the following before proceeding:
+> After Target 4 switched GitLab to HTTPS, the `sample-app` Application CR may still contain the old HTTP `repoURL`. The Secret was updated in Target 4 but the Application CR was not. If you see `ComparisonError: dial tcp 192.168.50.30:80`, apply this fix before proceeding:
 >
 > ```bash
 > oc patch application sample-app -n openshift-gitops \
@@ -40,7 +40,7 @@ Sync: Synced, Health: Healthy
 >
 > Then save the corrected Application CR to Git so it cannot drift again.
 >
-> **Note:** This CR also changes `project` from `default` to `lab-apps`. Target 3 originally created `sample-app` under `project: default`. The `lab-apps` AppProject created in this target (Section 5.2) replaces it. This change only works after the AppProject bootstrap in Section 7 — if you commit this file before applying `lab-project.yaml`, ArgoCD will reject it with `AppProject lab-apps not found`.
+> **Note:** This CR also changes `project` from `default` to `lab-apps`. Target 3 originally created `sample-app` under `project: default`. The `lab-apps` AppProject created in this target (Section 5.2) replaces it. This change only works after the AppProject bootstrap in Section 7: if you commit this file before applying `lab-project.yaml`, ArgoCD will reject it with `AppProject lab-apps not found`.
 >
 > ```bash
 > cat > ~/openshift-gitops/cluster-configs/argocd/sample-app.yaml << 'EOF'
@@ -82,11 +82,11 @@ Sync: Synced, Health: Healthy
 |---|---|
 | ArgoCD operator installed and running | Target 3 |
 | GitLab repository `openshift-gitops` accessible over HTTPS | Target 2 / Target 4 |
-| ArgoCD repo Secret pointing at `https://gitlab.lab.example.internal` | Target 4 -- Section 6.11 |
-| Wildcard certificate on IngressController | Target 4 -- Section 5.2 |
-| Lab Internal CA in cluster proxy trust bundle | Target 4 -- Section 5.3 |
-| Lab Internal CA installed in Windows trust store | Target 4 -- Section 9.1 |
-| Jump VM with `oc` CLI and kubeconfig | Target 1 -- Section 8.1 |
+| ArgoCD repo Secret pointing at `https://gitlab.lab.example.internal` | Target 4, Section 6.11 |
+| Wildcard certificate on IngressController | Target 4, Section 5.2 |
+| Lab Internal CA in cluster proxy trust bundle | Target 4, Section 5.3 |
+| Lab Internal CA installed in Windows trust store | Target 4, Section 9.1 |
+| Jump VM with `oc` CLI and kubeconfig | Target 1, Section 8.1 |
 
 ---
 
@@ -152,7 +152,7 @@ NGINX_VERSION=1.26
 ```
 
 ```bash
-# Discover all writable paths -- required for readOnlyRootFilesystem
+# Find the writable paths needed for readOnlyRootFilesystem
 oc run nginx-probe \
   --image=registry.access.redhat.com/ubi10/nginx-126:latest \
   --restart=Never --rm -it \
@@ -168,7 +168,7 @@ Expected writable paths nginx uses at runtime:
 /var/tmp
 ```
 
-> [!danger] UBI nginx images are S2I builder images -- not runtime images
+> [!danger] UBI nginx images are S2I builder images, not runtime images
 > All UBI nginx variants (`nginx-120`, `nginx-122`, `nginx-124`, `nginx-126`) are Source-to-Image builder images. They exit immediately when run without the S2I scripts. To use them as runtime servers, override the command with `nginx -g "daemon off;"` and mount content into `/opt/app-root/src`.
 
 Key paths used in the manifests:
@@ -178,7 +178,7 @@ Key paths used in the manifests:
 | Document root | `/opt/app-root/src` |
 | Main nginx config | `/etc/nginx/nginx.conf` |
 | PID file | `/var/run/nginx/nginx.pid` |
-| Container UID | `1001` / GID `0` -- compatible with `restricted-v2` SCC |
+| Container UID | `1001` / GID `0`, compatible with `restricted-v2` SCC |
 
 Retrieve the exact image digest for pinning in the Deployment manifest. Run a temporary pod and extract the resolved digest from the pod status:
 
@@ -198,7 +198,7 @@ oc get pod nginx-probe \
 oc delete pod nginx-probe
 ```
 
-Record the digest output — this is used in the Deployment manifest (Section 4.5) to pin the image by content hash rather than by mutable tag.
+Record the digest output: this is used in the Deployment manifest (Section 4.5) to pin the image by content hash rather than by mutable tag.
 
 ---
 
@@ -236,7 +236,7 @@ EOF
 
 ### 4.3 HTML ConfigMap
 
-The `index.html` content is declared inline. No external dependencies or CDN requests -- the page loads in an air-gapped environment.
+The `index.html` content is declared inline. It makes no CDN requests and can load in an air-gapped environment.
 
 ```bash
 cat > apps/static-website/configmap.yaml << 'EOF'
@@ -368,13 +368,13 @@ EOF
 
 The deployment uses several patterns worth understanding:
 
-**Image digest pinning:** The image is referenced by `sha256` digest rather than the `latest` tag. A tag is a mutable pointer that Red Hat can move at any time. A digest is the cryptographic hash of the image contents and is immutable -- guaranteeing reproducibility and enabling supply chain auditability.
+**Image digest pinning:** The image uses a `sha256` digest instead of the mutable `latest` tag. This makes the exact image version explicit and easier to audit.
 
 **`restartedAt` annotation:** nginx does not reload when a mounted ConfigMap volume changes. The kubelet syncs the volume but nginx worker processes continue serving from cached file descriptors. Adding this annotation to the pod template means bumping the timestamp in the same commit as a ConfigMap change triggers an automatic rolling restart via ArgoCD. The pre-commit hook in `.githooks/pre-commit` enforces this.
 
 **`readOnlyRootFilesystem: true`:** The container filesystem is mounted read-only. All paths nginx writes to at runtime are backed by emptyDir volumes (discovered in Step 3).
 
-**Probes:** The kubelet skips certificate verification for `httpGet` probes with `scheme: HTTPS` -- this is documented Kubernetes behaviour. The readiness probe gates traffic: the Pod only receives requests once nginx is confirmed serving. The liveness probe restarts the container if nginx stops responding.
+**Probes:** Kubernetes does not verify the certificate for an `httpGet` probe with `scheme: HTTPS`. The readiness probe keeps traffic away until nginx responds; the liveness probe restarts the container if nginx stops responding.
 
 ```bash
 cat > apps/static-website/deployment.yaml << 'EOF'
@@ -519,7 +519,7 @@ The re-encrypt Route terminates inbound TLS from the client at the IngressContro
 Browser → [wildcard cert / Lab Internal CA] → IngressController → [service cert / cluster CA] → nginx Pod
 ```
 
-The `destinationCACertificate` field must contain the cluster service CA — this is the CA that signed the service serving certificate and is distinct from the Lab Internal CA. The following command retrieves it and generates the complete Route manifest in a single step:
+The `destinationCACertificate` field needs the cluster service CA, which signed the service certificate and is separate from the Lab Internal CA. This command reads it and writes the complete Route manifest:
 
 ```bash
 SERVICE_CA=$(oc get configmap openshift-service-ca.crt \
@@ -548,7 +548,7 @@ $(echo "$SERVICE_CA" | sed 's/^/      /')
 EOF
 ```
 
-Verify the PEM was injected correctly — the file must contain a valid certificate block:
+Verify the PEM was injected correctly: the file must contain a valid certificate block:
 
 ```bash
 grep -c "BEGIN CERTIFICATE" apps/static-website/route.yaml
@@ -569,9 +569,9 @@ A dedicated AppProject restricts:
 - Destination namespaces to the specific namespaces used
 - Resource kinds to only what is actually deployed
 
-### 5.2 AppProject -- Bootstrap Resource
+### 5.2 AppProject bootstrap resource
 
-The AppProject is a bootstrap resource -- it must exist before ArgoCD can validate Application CRs that reference it. It cannot be managed by ArgoCD itself due to a circular dependency: ArgoCD needs the project to exist before it can create it. This is the same pattern as the root-app itself.
+The AppProject must exist before ArgoCD can validate Application CRs that reference it. Having the same Application create its own project would introduce a circular dependency, so the project is applied during bootstrap.
 
 ```bash
 mkdir -p cluster-configs/bootstrap
@@ -649,11 +649,11 @@ spec:
 EOF
 ```
 
-`CreateNamespace=false` is correct -- `namespace.yaml` is included in the managed manifests so ArgoCD creates it by applying the manifest, not by auto-creating it.
+`CreateNamespace=false` is correct because `namespace.yaml` is already part of the managed manifests.
 
 ### 5.4 Root Application CR (App-of-Apps)
 
-The root Application CR watches `cluster-configs/argocd/` in Git. Any Application CR committed to that directory is automatically deployed by ArgoCD -- adding a new application requires only a Git commit, no manual `oc apply`.
+The root Application CR watches `cluster-configs/argocd/` in Git. ArgoCD deploys any Application CR committed there, so new applications do not need a manual `oc apply`.
 
 ```bash
 cat > cluster-configs/argocd/root-app.yaml << 'EOF'
@@ -760,10 +760,10 @@ git push origin main
 Apply the two bootstrap resources. These are the only manual `oc apply` operations required for this cluster going forward.
 
 ```bash
-# 1. Apply the AppProject -- must exist before ArgoCD can validate Application CRs
+# 1. Apply the AppProject; it must exist before ArgoCD validates Application CRs
 oc apply -f cluster-configs/bootstrap/lab-project.yaml
 
-# 2. Apply the root Application CR -- manages all other Application CRs from Git
+# 2. Apply the root Application CR, which manages the others from Git
 oc apply -f cluster-configs/argocd/root-app.yaml
 ```
 
@@ -863,7 +863,7 @@ curl --cacert $HOME/pki/ca.crt \
 # Expected: <title>Infrastructure Lab</title>
 ```
 
-Navigate to the following URL from the Windows workstation with Tailscale active:
+With Tailscale active on the Windows workstation, open:
 
 ```
 https://static-website.apps.lab.example.internal
@@ -907,7 +907,7 @@ vim apps/static-website/deployment.yaml
 # Change: kubectl.kubernetes.io/restartedAt: "2026-03-20T00:00:00Z"
 # To:     kubectl.kubernetes.io/restartedAt: "<new timestamp>"
 
-# 3. Commit both together -- hook validates this
+# 3. Commit both together; the hook validates this
 git add apps/static-website/configmap.yaml apps/static-website/deployment.yaml
 git commit -m "content: update index.html"
 git push origin main
@@ -985,9 +985,9 @@ oc get pods -n static-website -w
 
 | # | Limitation | Impact | Resolution Path |
 |---|---|---|---|
-| 1 | Infrastructure layer (cert-manager, ClusterIssuer, OAuth CR, RBAC, secrets) applied via `oc apply` -- not under GitOps | Cluster state can drift from documentation. Rebuild requires re-running all commands manually. | Requires SealedSecrets or external-secrets-operator and sync wave ordering. Deferred to a future target. |
-| 2 | Bootstrap resources (`lab-project.yaml`, `root-app.yaml`) require manual `oc apply` | Not a pure Git-only workflow for first deployment. All subsequent apps require only a Git commit. | Accepted. Standard pattern for AppProject and App-of-Apps bootstrap. |
-| 3 | Pre-commit hook is local only -- can be bypassed with `git commit --no-verify` | Developer discipline is still required. Hook is not enforced server-side. | Requires a GitLab Runner to enforce via CI pipeline. Deferred until runner is configured. |
+| 1 | Infrastructure layer (cert-manager, ClusterIssuer, OAuth CR, RBAC, secrets) applied with `oc apply` rather than GitOps | Cluster state can drift from documentation. Rebuild requires re-running all commands manually. | Requires SealedSecrets or external-secrets-operator and sync wave ordering. Deferred to a future target. |
+| 2 | Bootstrap resources (`lab-project.yaml`, `root-app.yaml`) require manual `oc apply` | The first deployment is not Git-only. Later applications require only a Git commit. | Apply these two resources once when bootstrapping ArgoCD. |
+| 3 | Pre-commit hook is local and can be bypassed with `git commit --no-verify` | Developer discipline is still required. Hook is not enforced server-side. | Requires a GitLab Runner to enforce via CI pipeline. Deferred until runner is configured. |
 
 ---
 
@@ -996,13 +996,13 @@ oc get pods -n static-website -w
 | Issue | Cause | Resolution |
 |---|---|---|
 | `ComparisonError: dial tcp 192.168.50.30:80` | Application CR `repoURL` still using HTTP | Patch the CR: `oc patch application <n> -n openshift-gitops --type=merge --patch '{"spec":{"source":{"repoURL":"https://..."}}}'` |
-| Pod `Status: Completed` cycling to `CrashLoopBackOff` | UBI nginx image is S2I -- exits without command override | Add `command: ["nginx", "-g", "daemon off;"]` to the container spec |
+| Pod `Status: Completed` cycling to `CrashLoopBackOff` | UBI nginx image is S2I and exits without a command override | Add `command: ["nginx", "-g", "daemon off;"]` to the container spec |
 | `nginx: open() error (30: Read-only file system)` | `readOnlyRootFilesystem: true` with missing emptyDir volume | Probe the image with `find / -writable` and add emptyDir for each missing path |
 | Secret `static-website-tls` not created | Service annotation missing or incorrect | Verify: `service.beta.openshift.io/serving-cert-secret-name: static-website-tls` |
 | `resource argoproj.io:AppProject is not permitted` | Application CR references project that does not yet exist | Apply the AppProject manually first: `oc apply -f cluster-configs/bootstrap/lab-project.yaml` |
 | ArgoCD synced but old image still running | ServerSideApply cache not flushed | Force hard refresh: `oc annotate application <n> -n openshift-gitops argocd.argoproj.io/refresh=hard --overwrite` |
 | Content update not served after Git push | `restartedAt` timestamp not bumped in same commit | Update both `configmap.yaml` and `restartedAt` in `deployment.yaml` together |
-| Browser shows certificate warning | Lab Internal CA not in Windows trust store | Install `ca.crt` into Trusted Root Certification Authorities -- Target 4 Section 9.1 |
+| Browser shows certificate warning | Lab Internal CA not in Windows trust store | Install `ca.crt` into Trusted Root Certification Authorities (Target 4, Section 9.1) |
 
 ---
 
@@ -1010,19 +1010,19 @@ oc get pods -n static-website -w
 
 | Resource | Name | Namespace | Purpose |
 |---|---|---|---|
-| Namespace | `static-website` | -- | Isolated workload namespace |
-| ServiceAccount | `static-website` | `static-website` | Dedicated SA -- no API token automounted |
+| Namespace | `static-website` | - | Isolated workload namespace |
+| ServiceAccount | `static-website` | `static-website` | Dedicated SA with no API token automounted |
 | ConfigMap | `static-website-html` | `static-website` | `index.html` content |
 | ConfigMap | `static-website-nginx-conf` | `static-website` | nginx HTTPS configuration |
-| Deployment | `static-website` | `static-website` | nginx -- digest-pinned, read-only FS, Guaranteed QoS |
+| Deployment | `static-website` | `static-website` | nginx with a pinned digest, read-only FS, and Guaranteed QoS |
 | Service | `static-website` | `static-website` | ClusterIP with serving-cert annotation |
 | Secret | `static-website-tls` | `static-website` | Auto-issued service serving certificate |
-| Route | `static-website` | `static-website` | Re-encrypt Route -- public ingress |
-| AppProject | `lab-apps` | `openshift-gitops` | Scoped ArgoCD project -- replaces default |
-| Application CR | `root-app` | `openshift-gitops` | App-of-Apps -- manages all Application CRs |
+| Route | `static-website` | `static-website` | Re-encrypt Route for public ingress |
+| AppProject | `lab-apps` | `openshift-gitops` | Scoped ArgoCD project that replaces `default` |
+| Application CR | `root-app` | `openshift-gitops` | App-of-Apps that manages all Application CRs |
 | Application CR | `static-website` | `openshift-gitops` | GitOps sync definition |
-| Application CR | `sample-app` | `openshift-gitops` | Target 3 workload -- managed by root-app |
+| Application CR | `sample-app` | `openshift-gitops` | Target 3 workload managed by `root-app` |
 | Bootstrap manifest | `cluster-configs/bootstrap/lab-project.yaml` | Git | Applied once manually before ArgoCD bootstrap |
 | Pre-commit hook | `.githooks/pre-commit` | Git | Enforces restartedAt on configmap updates |
 | Cluster service CA | `openshift-service-ca.crt` | `openshift-config-managed` | Source of `destinationCACertificate` |
-| Public URL | `https://static-website.apps.lab.example.internal` | -- | Browser endpoint |
+| Public URL | `https://static-website.apps.lab.example.internal` | - | Browser endpoint |

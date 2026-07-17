@@ -1,6 +1,6 @@
 # Sanitization notes
 
-The public portfolio files were derived from internship lab notes. The following classes of information were replaced or generalized before publication:
+These public files came from internship lab notes. Before publishing them, I replaced or generalized:
 
 - internal company and environment names;
 - private DNS suffixes and hostnames;
@@ -9,4 +9,4 @@ The public portfolio files were derived from internship lab notes. The following
 - repository usernames where examples should remain reusable;
 - credentials, tokens and interactive password output.
 
-The documents still discuss how secrets and certificates are managed because those are relevant engineering topics. They do not intentionally contain usable credentials or private keys.
+The documents still explain secret and certificate management because those details matter to the work. They should not contain usable credentials or private keys.

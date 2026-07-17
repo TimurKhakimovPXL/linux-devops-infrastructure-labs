@@ -1,56 +1,50 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
 
-# Docker Security Risks vs Podman Rootless Security
+# Rootful Docker and Rootless Podman: Security Comparison
 
 ## Goal
-Demonstrate the security risks of running Docker containers as root and explain why Podman, especially in rootless mode, provides a safer architecture.  
-This target focuses on **privilege boundaries**, **namespaces**, and **risk profiles**, not on performance differences.
 
----
+Compare the privilege boundaries of rootful Docker and rootless Podman. This lab focuses on namespaces and host access, not performance.
 
-# 1. Why Docker Is Risky by Design
+# 1. Rootful Docker's trust boundary
 
-Docker uses a **rootful daemon (`dockerd`)**:
+In its default rootful configuration, Docker uses a privileged daemon (`dockerd`) that:
 
-- runs as **host root**
-- controls all container operations
-- exposes a root-equivalent API (`/var/run/docker.sock`)
-- grants full host privileges if misused
+- runs as host root;
+- controls container operations;
+- exposes its API through `/var/run/docker.sock`; and
+- can grant host-level access to anyone who controls that socket.
 
-### Critical vulnerabilities:
-1. **docker.sock = full system compromise**  
-   Any process with access to the socket can become host root instantly.
+### Main risks
 
-2. **Container root = Host root (no user namespace by default)**  
-   A breakout gives true host root privileges.
+1. **The Docker socket is root-equivalent.** A process with unrestricted access to it can mount the host filesystem or start a privileged container.
 
-3. **Daemon attack surface**  
-   A remote or local exploit in `dockerd` compromises the entire system.
+2. **User namespaces are not enabled by default.** Without user-namespace remapping, UID 0 in the container is also UID 0 on the host. Namespace isolation still applies, but a successful breakout reaches host root.
 
-4. **Image pulls and unpacking done as real root**  
-   Malicious images can exploit root-level file parsing vulnerabilities.
+3. **The daemon is privileged.** A daemon vulnerability has a larger impact because `dockerd` runs as root.
 
-Docker’s architecture inherently requires **maximum trust**.
+4. **Image handling happens with elevated privileges.** A flaw in image parsing or extraction can therefore affect the host.
 
 ---
 
 # 2. Why Podman Is Safer
 
-Podman is:
+Rootless Podman changes that trust boundary. It is:
 
 - **daemonless**  
 - uses **per-container system calls**  
 - integrates with **systemd**  
 - supports **fully rootless operation**
 
-### Key advantages:
-- No privileged daemon  
-- No exposed root socket  
-- Image unpacking can run as an unprivileged user  
-- Containers run in **user namespaces** by default (rootless mode)
+### Practical advantages
 
-This eliminates entire categories of attacks that plague Docker.
+- There is no long-running privileged daemon.
+- The user does not need access to a root-owned control socket.
+- Images can be unpacked as an unprivileged user.
+- Rootless containers use a user namespace by default.
+
+These controls reduce the impact of a container escape. They do not make an untrusted container harmless: it can still access anything available to the host user who launched it.
 
 ---
 
@@ -58,14 +52,12 @@ This eliminates entire categories of attacks that plague Docker.
 
 In rootless mode:
 
-- Container “root” → mapped to an **unprivileged** host UID (e.g., 100000)
-- Escapes cannot escalate to real root
-- Storage lives in the user’s `$HOME`, not `/var/lib/containers`
-- No privileged system calls  
-- Networking is user-space only (slirp4netns/pasta)
+- Container `root` maps to an unprivileged host UID, such as 100000.
+- Container storage lives under the user's home directory rather than `/var/lib/containers`.
+- Networking uses a user-space helper such as `slirp4netns` or `pasta`.
+- Operations that require real host privileges remain unavailable.
 
-### Effect:
-Even if a container is fully compromised, it becomes a **non-privileged host user**, not host root.
+If the container is compromised, the attacker is limited to the permissions of the host user unless another vulnerability or unsafe configuration provides a path to higher privileges.
 
 ---
 
@@ -83,8 +75,9 @@ host user 'labuser'
 └── container B root → host UID 100000
 ```
 
-## **5. Practical Demonstration**
-```
+## 5. Practical demonstration
+
+```console
 labuser@lab-host:~$ sudo docker run -v /:/mnt -it alpine sh
 / # hostname
 394ada1cc8f8
@@ -95,11 +88,11 @@ opt         proc        root        run         sbin        srv
 sys         tmp         usr         var         bin         dev
 home        lib         lost+found  mnt
 
-##Alpine image has no apt/sudo
+# Alpine has neither apt nor sudo
 / # apt
 sh: apt: not found
 
-##Breakout
+# Enter the bind-mounted host filesystem
 / # chroot /mnt
 root@394ada1cc8f8:/# pwd
 /
@@ -116,14 +109,12 @@ uid=1000(labuser) gid=1000(labuser) groups=1000(labuser),4(adm),24(cdrom),27(sud
 labuser@394ada1cc8f8:/# cat /etc/hostname
 lab-host
 ```
-The container is started with `-v /:/mnt`, exposing the host’s full filesystem. 
-Running `chroot /mnt` replaces the container’s root filesystem with the host’s, giving the container process direct access to host binaries and configuration. 
-Successfully switching to the user `labuser` proves that the container is now reading the host’s `/etc/passwd`, `/etc/shadow`, and `/etc/group`. 
-This confirms full host compromise and demonstrates that Docker containers are not a security boundary when the host filesystem is bind-mounted.
+The `-v /:/mnt` option exposes the host filesystem inside the container. Running `chroot /mnt` then uses the host filesystem as `/`, including its binaries and account database. Switching to `labuser` confirms that the process is reading the host's account files. The example succeeds because the operator explicitly mounted `/`; it demonstrates why access to Docker is root-equivalent, not a generic escape from an otherwise isolated container.
+
+## References
 
 - **Docker Daemon Socket Security (`/var/run/docker.sock`):** [https://docs.docker.com/engine/security/protect-access/](https://docs.docker.com/engine/security/protect-access/)
     
 - **Podman Architecture (Daemonless & Rootless):** [https://docs.podman.io/en/latest/Introduction.html](https://docs.podman.io/en/latest/Introduction.html)
 
 - [Privilege Escalation using Docker Container | by Bishal Chapagain | InfoSec Write-ups](https://infosecwriteups.com/privilege-escalation-using-docker-container-e9110713936b)
- 

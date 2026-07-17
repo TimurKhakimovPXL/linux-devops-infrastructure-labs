@@ -1,8 +1,6 @@
 # Linux, DevOps and OpenShift Infrastructure Labs
 
-A technical portfolio of hands-on infrastructure work completed during a DevOps and infrastructure engineering internship.
-
-The repository follows the progression of the internship: Linux containers and automation first, followed by a complete OpenShift platform lab with GitLab, GitOps, internal PKI and secured application delivery.
+These are the working notes and runbooks I produced during a DevOps and infrastructure engineering internship. They start with Linux containers and automation, then move into an OpenShift lab built around GitLab, GitOps, internal PKI, and application delivery.
 
 ## Highlights
 
@@ -85,11 +83,11 @@ The publishing script uses the GitHub CLI, initializes Git, creates the first co
 
 ## Scope
 
-The documents are detailed engineering records rather than one-click production recipes. Versions and environment assumptions are recorded in each document. Validate commands against current vendor documentation before using them in production.
+These documents record what I built and what went wrong along the way; they are not one-click production recipes. Each guide states its version and environment assumptions. Check the commands against current vendor documentation before using them in production.
 
 ## Author
 
-**Timur Khakimov** — Junior Linux and DevOps Engineer focused on RHEL/Fedora, automation, containers, OpenShift and platform security.
+**Timur Khakimov**, Junior Linux and DevOps Engineer focused on RHEL/Fedora, automation, containers, OpenShift, and platform security.
 
 ## License
 

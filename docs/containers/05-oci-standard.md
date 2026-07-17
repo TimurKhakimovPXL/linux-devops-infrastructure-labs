@@ -1,78 +1,64 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
 
-# Target 5 — Understanding the OCI Standard
+# Target 5: Understanding the OCI Standards
 
 ## Goal
-Explain the Open Container Initiative (OCI) standard and why it matters when building and running containers with Podman and Docker.  
-This target focuses on practical implications relevant to your project: image format compatibility, tooling interoperability, and secure operations.
 
----
+Explain the Open Container Initiative (OCI) specifications and how they let tools such as Podman, Docker, containerd, and registries work together.
 
 # 1. What Is OCI?
 
-The **Open Container Initiative (OCI)** defines open, vendor-neutral specifications for:
+The **Open Container Initiative (OCI)** maintains open, vendor-neutral specifications for:
 
-- **Image Format**: how container images are structured  
-- **Runtime Specification**: how a container process is created and isolated  
-- **Distribution Specification**: how images are pushed/pulled from registries  
+- **image format:** how container images are structured;
+- **runtime behavior:** how a container process is created and isolated; and
+- **distribution:** how clients push images to and pull images from registries.
 
-OCI solves the fragmentation that existed between early container technologies by standardizing the container ecosystem.
+These shared formats and interfaces prevent each container engine and registry from becoming its own incompatible ecosystem.
 
 ---
 
 # 2. Why OCI Exists 
 
-Before OCI:
+Early container tools used incompatible image formats and registry interfaces. OCI gave engines and registries a common set of specifications now used across Podman, Docker, CRI-O, containerd, Kubernetes, and other projects.
 
-- Docker images worked only with Docker  
-- Other runtimes had incompatible formats  
-- No standard for registries, layers, or metadata  
-
-After OCI, all major engines use the same specifications:
-
-- Podman  
-- Docker  
-- CRI-O  
-- containerd  
-- Kubernetes  
-
-**Meaning: you can build an image once and run it anywhere.**
+In practice, an OCI image built with one engine can usually be pushed to a standard registry and run by another engine. Platform, architecture, and runtime requirements still have to match, so “build once, run anywhere” is a useful goal rather than an absolute guarantee.
 
 ---
 
-# 3. The Three OCI Specifications (Concise)
+# 3. The three OCI specifications
 
-### 1) **OCI Image Specification**
-Defines:
-- Image layers  
-- Config metadata  
-- Filesystem layout  
-- Manifest format  
+### OCI Image Specification
 
-Example:  
-The `Containerfile` produces an OCI-compliant image. Podman and Docker can both run it.
+Defines the image manifest, configuration metadata, filesystem layers, and content-addressable layout.
 
----
+- Image layers
+- Configuration metadata
+- Filesystem layout
+- Manifest format
 
-### 2) **OCI Runtime Specification**
-Defines how a container process is launched using Linux primitives:
-
-- namespaces  --> "What can I see?"
-- cgroups   --> How much can I use?
-- seccomp  --> Where do I live ?
-- capabilities  --> What powers do I have ?
-- rootfs mount  --> Who can I call? (Secure Computing Mode)
-	--> Acts as a firewall for System Calls to the Linux Kernel
-
-Tools that implement this spec:
-	- **runc** (used by Docker & containerd)  
-	- **crun** (default in Podman, faster & safer)  
+A `Containerfile` can produce an OCI-compatible image that both Podman and Docker understand.
 
 ---
 
-### 3) **OCI Distribution Specification**
-Defines how images are transferred:
+### OCI Runtime Specification
+
+Defines how a container process is launched, including its root filesystem, namespaces, cgroups, capabilities, and seccomp settings.
+
+- **Namespaces** control what the process can see.
+- **Cgroups** limit and account for resource usage.
+- **Seccomp** filters system calls.
+- **Capabilities** split root privileges into smaller units.
+- **rootfs** defines the filesystem presented as `/`.
+
+Low-level runtimes that implement this specification include `runc` and `crun`.
+
+---
+
+### OCI Distribution Specification
+
+Defines the registry API used to transfer images and related artifacts:
 
 - Push/pull  
 - Tagging  
@@ -86,22 +72,21 @@ Registries implementing this spec:
 - GHCR  
 - Harbor  
 
-This ensures you can push an image to Quay and pull it with Podman or Docker.
+For example, an image pushed to Quay with Podman can be pulled with Docker, provided both clients support its manifest and platform.
 
 ---
 
-# 4. Why OCI Matters 
+# 4. Why OCI matters
 
-###  Podman and Docker share the same image format  
-Everything you build with:
+Podman and Docker understand the same standard image formats. An image built with:
 
 ```bash
 podman build -t myapp .
 ```
-is pullable by `docker pull myapp`
-1) Containerfile is portable
-2) Registries are independent of engines
-3) Kubernetes compatible
+
+can be tagged, pushed to an OCI-compatible registry, and pulled by another compatible engine. The practical benefits are portable build files, a choice of registries and runtimes, and images that can be deployed through Kubernetes.
+
+## References
 
 - **Open Container Initiative (Main Site):** [https://opencontainers.org/](https://opencontainers.org/)
     

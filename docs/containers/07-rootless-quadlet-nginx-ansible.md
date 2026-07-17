@@ -1,11 +1,10 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
 
-# Rootless Podman Deployment with Systemd User Services 
+# Rootless Podman Web App with Nginx and Ansible
 
 ## Goal
-Deploy the Flask webserver image using **rootless Podman** managed by **systemd Quadlet**.  
-Quadlet converts declarative `.container` files into systemd user services, allowing:
+Run the Flask image with rootless Podman and manage it as a systemd user service through Quadlet. The setup provides:
 
 - automatic restarts  
 - dependency management  
@@ -13,15 +12,15 @@ Quadlet converts declarative `.container` files into systemd user services, allo
 - rootless operation  
 - integration with `--userns=auto`  
 
-This target also ensures proper systemd user sessions using **enable-linger**, as required for persistent rootless services.
+User lingering keeps the service running after logout and starts the user manager during boot.
 
 ## Creating a non‑privileged user
 
-Two common commands exist to add a user: `useradd` and `adduser`. The research showed that `useradd` is a **low‑level** tool included on all Linux distributions. It creates an entry in `/etc/passwd` but does not set a password or create a home directory automatically[phoenixnap.com](https://phoenixnap.com/kb/useradd-vs-adduser#:~:text=The%20main%20difference%20between%20the,how%20the%20two%20commands%20execute). Ubuntu (and other Debian‑based systems) include a higher‑level wrapper called `adduser`, which interactively creates the home directory, copies skeleton files from `/etc/skel` and prompts for a password[phoenixnap.com](https://phoenixnap.com/kb/useradd-vs-adduser#:~:text=The%20main%20difference%20between%20the,how%20the%20two%20commands%20execute). In this lab, the user **sjoert** was created using `adduser` to ensure the home directory and password were set up correctly.
+On Debian and Ubuntu, `useradd` provides the low-level account-management command while `adduser` wraps it with prompts and sensible defaults. I used `adduser` for `sjoert` because the account needed a home directory and password ([comparison](https://phoenixnap.com/kb/useradd-vs-adduser)).
 
 ## Containerising the web server
 
-The simple web application consisted of a Python script (`app.py`) that prints “Hello, World!” when accessed. A Podman image was built and pushed to the registry as `quay.io/YOUR_QUAY_USER/hello‑world‑webserver:1.0`. Running the container manually as the `sjoert` user used a port mapping so that requests to port 8080 on the host reached port 8080 inside the container:
+The application is a small Python script that returns “Hello, World!” over HTTP. I built it as `quay.io/YOUR_QUAY_USER/hello‑world‑webserver:1.0` and first ran it manually as `sjoert`, mapping host port 8080 to the same port in the container:
 
 ```
 podman pull quay.io/YOUR_QUAY_USER/hello-world-webserver:1.0 
@@ -35,7 +34,7 @@ podman run -d --name web -p 8080:8080 quay.io/YOUR_QUAY_USER/hello-world-webserv
 
 ### Understanding Quadlet
 
-Podman 4.4 introduced **Quadlet** as a more declarative way to describe containers. According to the Podman systemd unit documentation, Quadlet reads `.container` files from a rootless search path (`$XDG_CONFIG_HOME/containers/systemd` or `~/.config/containers/systemd`) and converts them into `.service` units via a systemd generator[docs.podman.io](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#:~:text=Podman%20rootless%20unit%20search%20path%C2%B6). This generator runs at boot and on `daemon-reload`, creating services under `/run/user/<UID>/systemd/generator`. The documentation emphasises that these generated services are _transient_ and **cannot be enabled** with `systemctl enable`; instead, they should be managed through their source `.container` files[docs.podman.io](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#:~:text=Enabling%20unit%20files%C2%B6).
+Quadlet reads `.container` files from `$XDG_CONFIG_HOME/containers/systemd` or `~/.config/containers/systemd` and generates systemd services under `/run/user/<UID>/systemd/generator`. The generated units are transient, so the `.container` source file is what should be maintained rather than enabling the generated service directly ([Podman systemd unit documentation](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)).
 
 ### Creating `.container` files
 
@@ -58,17 +57,17 @@ Testing Quadlet
 
   
 
-The file was placed in `~/.config/containers/systemd`. After running `systemctl --user daemon-reload`, Podman’s systemd generator detected them and generated `web.service` and `web2.service` under `/run/user/<UID>/systemd/generator/`. Starting the services with `systemctl --user start web.service` (or `web2.service`) launched the containers.
+The file went into `~/.config/containers/systemd`. After `systemctl --user daemon-reload`, the generator created `web.service` and `web2.service` under `/run/user/<UID>/systemd/generator/`. Starting either service launched its container.
 
 
 
 ### Dry‑run and manual promotion
 
-Using the `--dryrun` option on the generator prints the service file that Quadlet would create:
+The generator's `--dryrun` option prints the service file without installing it:
 
 `/usr/lib/systemd/system-generators/podman-system-generator --user --dryrun`
 
-The output shows the full `[Unit]`, `[X-Container]` and `[Service]` sections with the exact `podman run` command (including `--sdnotify=conmon`, `--replace`, and port mappings). 
+The output includes the generated `[Unit]`, `[X-Container]`, and `[Service]` sections along with the final `podman run` command.
 
 ## Sources
 
@@ -85,7 +84,7 @@ The output shows the full `[Unit]`, `[X-Container]` and `[Service]` sections wit
 
 ## Setting up an Nginx reverse proxy
 
-Once the web service was running via systemd, the next objective was to expose it on **standard HTTP (80) and HTTPS (443) ports** and provide TLS termination. Allowing the container to serve directly on port 8080 meant clients had to specify a port in the URL (`http://hostname:8080`). A **reverse proxy** sits in front of the application, listening on port 80/443, forwarding requests internally and optionally encrypting the connection. Nginx was selected because its documentation explains that it can act as a proxy server: Nginx receives a client request and forwards it to a proxied server using the `proxy_pass` directive inside a `location` block[nginx.org](https://nginx.org/en/docs/beginners_guide.html#:~:text=,Proxy%20Server). The directive can forward to an IP address and port, and must appear within a `location` block[docs.nginx.com](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/#:~:text=It%20is%20possible%20to%20proxy,FastCGI%2C%20uwsgi%2C%20SCGI%2C%20and%20memcached). Nginx allows forwarding the `Host` and client IP headers to the backend using `proxy_set_header`[docs.nginx.com](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/#:~:text=location%20%2Fsome%2Fpath%2F%20,IP%20%24remote_addr%3B%20proxy_pass%20http%3A%2F%2Flocalhost%3A8000). TLS support requires enabling the `ssl` parameter on the listen directive and specifying the certificate and private key files[nginx.org](https://nginx.org/en/docs/http/configuring_https_servers.html#:~:text=To%20configure%20an%20HTTPS%20server%2C,19%20files%20should%20be%20specified).
+The container listens on port 8080, but the lab required normal HTTP and HTTPS URLs. Nginx therefore listens on ports 80 and 443, redirects HTTP to HTTPS, terminates TLS, and proxies requests to `127.0.0.1:8080`. The `proxy_set_header` directives preserve the original host and client details ([Nginx reverse proxy guide](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/)).
 
 ### Options considered
 
@@ -98,14 +97,14 @@ Two approaches were evaluated for the reverse proxy:
 
 ### Chosen solution
 
-The assignment stipulated that the application be accessible via **port 80 and 443**, so **Option A** (system‑wide Nginx) was implemented. An administrator installed Nginx and created a site configuration file `/etc/nginx/sites‑available/hello.local` with two server blocks:
+Because the application had to use ports 80 and 443, I chose system-wide Nginx. Its `/etc/nginx/sites‑available/hello.local` configuration contains two server blocks:
 
 - A **HTTP block** listening on port 80 that returns a `301` redirect to `https://$host$request_uri;` ensuring all traffic is encrypted.
     
 - An **HTTPS block** listening on port 443 with the `ssl` parameter enabled and pointing to the certificate and key files. Inside the `location /` block, `proxy_pass http://127.0.0.1:8080;` forwards requests to the Podman container, and `proxy_set_header Host $host;` and `proxy_set_header X‑Real‑IP $remote_addr;` ensure that the backend sees the original host and client IP[docs.nginx.com](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/#:~:text=location%20%2Fsome%2Fpath%2F%20,IP%20%24remote_addr%3B%20proxy_pass%20http%3A%2F%2Flocalhost%3A8000).
     
 
-After populating the configuration file, the site was enabled by creating a symlink from `/etc/nginx/sites‑enabled/hello.local` to the file in `sites‑available`. This pattern is standard on Debian/Ubuntu and controls which virtual hosts are active. The steps were:
+On Debian and Ubuntu, a symlink in `sites-enabled` activates the file from `sites-available`:
 
 ```
 sudo apt update 
@@ -125,11 +124,11 @@ The `openssl` command generates a self‑signed certificate and private key, whi
 
 ### Verification and testing
 
-Testing was performed with **curl**. A request to `http://hello.local` returned an HTTP 301 redirect to `https://hello.local/`, confirming that the redirect block worked. A request to `https://hello.local` with the `-k` flag (to accept the self‑signed certificate) returned `Hello, World!`, showing that Nginx successfully proxied requests to the backend container. The backend service on port 8080 continued to run under the `sjoert` user and could be checked with `systemctl --user status container-web.service` and `curl http://127.0.0.1:8080`. If Nginx returned **502 Bad Gateway**, the error log (`/var/log/nginx/error.log`) was inspected, and typical causes were the backend service not running or listening on a different interface.
+`curl http://hello.local` returned a 301 redirect to HTTPS. With `-k` to accept the self-signed certificate, `curl https://hello.local` returned `Hello, World!`. The backend remained a user service on port 8080. A 502 response usually meant that service was stopped or listening on the wrong interface, which could be confirmed in `/var/log/nginx/error.log`.
 
 ### Problems encountered and lessons learned
 
-The main challenge was that the `sjoert` user lacked root privileges. Binding to ports 80 and 443 and installing Nginx required administrator help. A rootless proxy (Option B) was considered but rejected due to the port requirement. In rootless environments, a reverse proxy can still run on high ports and be managed by systemd, but it will not fulfil an “80/443” requirement without additional capabilities or firewall rules. Another subtle point is distinguishing between **systemd unit enabling** and **Nginx site enabling**. The `systemctl enable` command operates on systemd services, whereas Nginx uses symlinks or files under `conf.d`/`sites‑available` to enable virtual hosts. Understanding this difference avoids confusion when managing services versus virtual hosts. The optional `proxy_bind` directive in Nginx was researched but deemed unnecessary because the backend listens on `127.0.0.1` and only one outbound path exists.
+The `sjoert` account could not install Nginx or bind ports 80 and 443, so those steps required administrator access. A rootless proxy on high ports would work, but it would not meet the port requirement without extra capabilities or firewall rules. Systemd service enablement and Nginx site enablement are also separate mechanisms: systemd uses `systemctl`, while Debian's Nginx layout uses symlinks under `sites-enabled`. The backend listens only on loopback, so `proxy_bind` was unnecessary.
 
 ### End result
 
@@ -147,7 +146,7 @@ Hello, World!sjoert@lab-host:~$
 ```
 ### Further reading and sources
 
-For additional information, consult the following documentation:
+Useful references:
 
 - **Nginx Beginner’s Guide** – explains how Nginx can act as a reverse proxy and provides example configuration blocks with `proxy_pass` that forward requests to a proxied server[nginx.org](https://nginx.org/en/docs/beginners_guide.html#:~:text=,Proxy%20Server).
     
@@ -164,32 +163,30 @@ For additional information, consult the following documentation:
 
 
 
-# Automating a Rootless Flask Web App with Nginx and Ansible
+## Full Ansible Runbook
 
-This report integrates the original documentation and later additions to provide a single, comprehensive reference on how to deploy a **rootless Podman** containerised Flask application behind **Nginx** with TLS using **Ansible**. It includes the environment and goals, the design of the Ansible role and playbook, the full code for the role and templates, a record of all problems encountered with their solutions, and a summary of the final execution output. Citations from official documentation justify the design choices.
+The first half records the manual setup. This section develops the same lab into a reusable Ansible role and keeps the problems encountered during the work.
 
 ## Environment and Goals
 
-The target was to run a simple Flask web app (printing _Hello World_) in a **rootless Podman** container and expose it on standard HTTP/HTTPS ports via **Nginx**. The deployment needed to satisfy the following requirements:
+The Flask app returns _Hello World_ from a rootless Podman container. Nginx publishes it on ports 80 and 443. The Ansible version had six requirements:
 
 1. **Rootless Podman and networking:** run the app as an unprivileged user (e.g., `sjoert`) using Podman’s rootless mode. Podman’s manual explains that rootless containers cannot create their own network devices; instead they rely on helpers such as **slirp4netns** or **pasta** to provide network connectivity[docs.podman.io](https://docs.podman.io/en/stable/markdown/podman.1.html#:~:text=Currently%20slirp4netns%20or%20pasta%20is,network%20namespace%20of%20the%20host).
     
 2. **Systemd integration via Quadlet:** manage the container as a systemd service without root. The Podman _Quadlet_ generator reads `.container` files placed under `~/.config/containers/systemd` and produces transient user units[man.archlinux.org](https://man.archlinux.org/man/quadlet.5.en#:~:text=Podman%20rootless%20unit%20search%20path). These files must not define `User`, `Group` or `DynamicUser` directives; the service runs as the file owner[man.archlinux.org](https://man.archlinux.org/man/quadlet.5.en#:~:text=Note%20that%20Quadlet%20units%20do,above%20rootless%20unit%20search%20paths).
     
-3. **HTTP → HTTPS redirection:** requests on port 80 should be redirected to port 443, then proxied to the container on localhost. Nginx’s `return` directive stops request processing and issues a response; when given a 301 code, it forms a full URL and performs a redirect[nginx.org](https://nginx.org/en/docs/http/ngx_http_rewrite_module.html#:~:text=Syntax%3A%20%20%60return%20%60code%60%20,URL).
+3. **HTTP to HTTPS:** redirect port 80 to port 443, then proxy the request to the container on localhost. Nginx's `return 301` directive handles the redirect ([rewrite module](https://nginx.org/en/docs/http/ngx_http_rewrite_module.html)).
     
-4. **TLS self‑signed certificates:** generate a self‑signed certificate for each domain using Ansible’s `community.crypto` modules. The `x509_certificate` module accepts `selfsigned_not_before` and `selfsigned_not_after` parameters to set the certificate validity; if not specified, it defaults to a 10‑year lifetime[docs.ansible.com](https://docs.ansible.com/ansible/latest/collections/community/crypto/x509_certificate_module.html#:~:text=Digest%20algorithm%20to%20be%20used,signing%20the%20certificate). The private key must be generated first using `openssl_privatekey`, which expects a `path` and creates a file with mode `0600`[docs.ansible.com](https://docs.ansible.com/ansible/latest/collections/community/crypto/openssl_privatekey_module.html#:~:text=path); RSA is the default algorithm[docs.ansible.com](https://docs.ansible.com/ansible/latest/collections/community/crypto/openssl_privatekey_module.html#:~:text=Choices%3A).
+4. **Self-signed TLS certificates:** create one certificate per domain with Ansible's `community.crypto` modules. The role generates the key first, then a CSR, and finally the certificate.
     
-5. **Private registry login:** pull the container image from a private registry (Quay.io) using Ansible. The `podman_login` module writes credentials to `${XDG_RUNTIME_DIR}/containers/auth.json` and accepts `registry`, `username` and `password` parameters[docs.ansible.com](https://docs.ansible.com/ansible/latest/collections/containers/podman/podman_login_module.html#:~:text=password).
+5. **Private registry login:** authenticate to Quay with `podman_login`, using credentials stored in Ansible Vault.
     
-6. **Reusable automation:** use Ansible roles and variables to support multiple hosts and multiple applications. Provide a secure mechanism (Ansible Vault) to store secrets. Handle check‑mode idempotency and cross‑platform issues such as ACL support and temporary directories.
+6. **Reusable automation:** support multiple hosts and applications through role variables, keep secrets in Ansible Vault, and make check mode useful.
     
-
-The next sections describe how these requirements were implemented.
 
 ## Building the Container Image
 
-A minimal Flask app (`app.py`) listens on port 8080 and returns _Hello World_. The container is built with the following `Dockerfile` (also valid as a Podman `Containerfile`):
+A minimal Flask app listens on port 8080 and returns _Hello World_. The same build file works as either a Dockerfile or Podman Containerfile:
 
 `FROM python:3.12-slim 
 WORKDIR /app COPY app.py . 
@@ -201,11 +198,11 @@ After building and testing the image locally, it was pushed to **Quay.io** under
 
 ## Rootless Podman and Quadlet
 
-Running containers rootlessly means they cannot create network devices on their own. The Podman manual states that helpers like `slirp4netns` or `pasta` must be used for rootless networking[docs.podman.io](https://docs.podman.io/en/stable/markdown/podman.1.html#:~:text=Currently%20slirp4netns%20or%20pasta%20is,network%20namespace%20of%20the%20host). The host therefore installs `uidmap`, `slirp4netns` and `passt` (providing `pasta`) via apt. In practice `pasta` offered better performance, but when port 8080 was already in use it failed to bind; falling back to `slirp4netns` or changing the port solved the conflict.
+Rootless Podman uses a helper such as `slirp4netns` or `pasta` for networking. The host installs `uidmap`, `slirp4netns`, and `passt`, which provides `pasta`. In this lab, `pasta` performed better but failed when port 8080 was already occupied. Changing the port or falling back to `slirp4netns` fixed the conflict.
 
 ### Quadlet Configuration
 
-Podman’s _Quadlet_ allows systemd to manage containers using simple `.container` files. According to the `quadlet(5)` manual, rootless users place these files in `~/.config/containers/systemd/`[man.archlinux.org](https://man.archlinux.org/man/quadlet.5.en#:~:text=Podman%20rootless%20unit%20search%20path). Quadlet then generates corresponding units under `/run/user/$UID/systemd/generator/`. The manual also notes that these files must **not** specify `User`, `Group` or `DynamicUser` directives[man.archlinux.org](https://man.archlinux.org/man/quadlet.5.en#:~:text=Note%20that%20Quadlet%20units%20do,above%20rootless%20unit%20search%20paths); the service runs as the file owner.
+Rootless users place Quadlet files in `~/.config/containers/systemd/`. The generator writes the resulting units under `/run/user/$UID/systemd/generator/`. These files must not set `User`, `Group`, or `DynamicUser`; the service already runs as the file owner ([quadlet(5)](https://man.archlinux.org/man/quadlet.5.en)).
 
 The template used for each application in our role is:
 
@@ -218,11 +215,11 @@ PodmanArgs=--replace
 [Install] 
 WantedBy=default.target`
 
-This template binds the container’s port to the host’s loopback address, uses the `pasta` network helper, enables auto‑update from the registry, and ensures the service is restarted if the template changes (via `--replace`).
+The template binds the published port to loopback, uses `pasta`, enables registry-based updates, and passes `--replace` so a changed unit can recreate the container.
 
 ## TLS Certificate Generation
 
-Self‑signed certificates are generated on the target using Ansible. The role first creates the directory `/etc/ssl/{{ domain }}`. It then generates a private key via `community.crypto.openssl_privatekey`. The module requires a `path` parameter and will create the file with secure permissions[docs.ansible.com](https://docs.ansible.com/ansible/latest/collections/community/crypto/openssl_privatekey_module.html#:~:text=path); the default algorithm is RSA but others are available[docs.ansible.com](https://docs.ansible.com/ansible/latest/collections/community/crypto/openssl_privatekey_module.html#:~:text=Choices%3A). Next, a CSR is built with `openssl_csr`, specifying the Common Name and SAN. Finally, `x509_certificate` signs the CSR with the private key using the `selfsigned` provider. The parameters `selfsigned_not_before` and `selfsigned_not_after` define the certificate validity[docs.ansible.com](https://docs.ansible.com/ansible/latest/collections/community/crypto/x509_certificate_module.html#:~:text=Digest%20algorithm%20to%20be%20used,signing%20the%20certificate). In check mode the key and certificate creation tasks are skipped to avoid failing when the directory has not yet been created.
+Ansible creates `/etc/ssl/{{ domain }}`, generates a private key, and builds a CSR containing the Common Name and SAN. The `x509_certificate` task signs the CSR with the `selfsigned` provider. `selfsigned_not_before` and `selfsigned_not_after` set the validity period. The crypto tasks are skipped in check mode because their output files do not yet exist.
 
 ## Nginx Reverse Proxy
 
@@ -233,9 +230,7 @@ Nginx terminates TLS and proxies HTTP requests to the rootless container. Each a
 The Jinja2 template used by the role (`templates/nginx_server.j2`) is summarised below. It demonstrates the redirect block and the TLS block; the actual file is included later in the role code section.
 
 ```
-# ============================================
 # HTTP → HTTPS redirect (always on)
-# ============================================
 server {
     listen 80;
     listen [::]:80;
@@ -246,9 +241,7 @@ server {
 }
 
 {% if tls_mode != 'none' %}
-# ============================================
 # HTTPS reverse proxy (only when TLS enabled)
-# ============================================
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
@@ -290,11 +283,11 @@ server {
 
 ## Ansible Role Design and Playbook
 
-To enable reuse and multi‑host deployment, the automation was implemented as a role named **`rootless_webapp`**. Users define a list of applications through variables. Each application includes the container name, user, domain, upstream port, image, internal container port, TLS mode and whether to add a hosts file entry for local testing.
+The automation lives in a `rootless_webapp` role. A variable list describes each application's name, user, domain, image, ports, TLS mode, and optional hosts-file entry.
 
 ### Role Structure and Source Code
 
-The role consists of the following files:
+The role has this layout:
 
 
 
@@ -332,11 +325,6 @@ roles/
 The default variables define the TLS root directory and Nginx paths.
 ```
 ---
-# ============================================================
-# Role: rootless_webapp
-# File: defaults/main.yml
-# Purpose: Define default variables used across all tasks
-# ============================================================
 
 # --- Web applications to deploy (each with image/domain/upstream info)
 apps: []
@@ -356,11 +344,6 @@ There is a single handler to reload Nginx after configuration changes.
 
 ```
 ---
-# ============================================================
-# Role: rootless_webapp
-# File: handlers/main.yml
-# Purpose: Define service handlers triggered by notify:
-# ============================================================
 
 - name: Reload nginx
   become: true
@@ -535,11 +518,6 @@ This task file orchestrates the deployment:
 
 ```
 ---
-# ============================================================
-# Role: rootless_webapp
-# File: tasks/tls.yml
-# Purpose: Handle TLS directory, key, CSR, and certificate setup
-# ============================================================
 
 # --- Define local TLS path facts ---------------------------------------------
 
@@ -605,11 +583,6 @@ This task file orchestrates the deployment:
 
 ```
 ---
-# ============================================================
-# Role: rootless_webapp
-# File: tasks/nginx.yml
-# Purpose: Configure Nginx reverse proxy for each rootless web app
-# ============================================================
 
 # --- Ensure Nginx directory structure ----------------------------------------
 
@@ -679,11 +652,6 @@ This task file orchestrates the deployment:
 
 ```
 ---
-# ============================================================
-# Role: rootless_webapp
-# File: tasks/quadlet.yml
-# Purpose: Deploy and manage rootless Podman containers using Quadlet
-# ============================================================
 
 # --- Ensure Quadlet directory exists for user -------------------------------
 
@@ -736,9 +704,7 @@ This task file orchestrates the deployment:
 The actual Nginx template file used by the role is included here for completeness:
 
 ```
-# ============================================
 # HTTP → HTTPS redirect (always enabled)
-# ============================================
 server {
     listen 80;
     listen [::]:80;
@@ -749,9 +715,7 @@ server {
 }
 
 {% if tls_mode != 'none' %}
-# ============================================
 # HTTPS reverse proxy (enabled when TLS is on)
-# ============================================
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
@@ -788,9 +752,7 @@ server {
 The Quadlet template defines the container configuration:
 
 ```
-# ============================================
 # Quadlet container definition
-# ============================================
 [Unit]
 Description={{ container_name }} (rootless via Quadlet)
 
@@ -810,10 +772,7 @@ WantedBy=default.target
 An example inventory file and group variables illustrate how to define hosts and applications.
 
 ```
-# ============================================================
 # Inventory: inventory.yml
-# Purpose: Define target hosts for rootless_webapp deployment
-# ============================================================
 
 all:
 
@@ -938,7 +897,7 @@ ansible-playbook -i inventory.yml site.yml
 
 ## Problems Encountered and Solutions
 
-The automation process surfaced several issues; each was solved as follows:
+The lab exposed several problems worth recording:
 
 1. **Deprecated parameters in crypto modules:** Early examples used parameters (`subject`, `dns_subject_alt_name`, `valid_days`) that were removed from the `x509_certificate` module. The role now generates a CSR with `openssl_csr` and uses `selfsigned_not_before`/`selfsigned_not_after` to set validity[docs.ansible.com](https://docs.ansible.com/ansible/latest/collections/community/crypto/x509_certificate_module.html#:~:text=Digest%20algorithm%20to%20be%20used,signing%20the%20certificate).
     
@@ -954,4 +913,3 @@ The automation process surfaced several issues; each was solved as follows:
     
 7. **User login confusion:** Using `login` or `loginctl` in scripts hung because `login` expects a tty. The correct method is `sudo -iu sjoert` to run commands as the application user and `systemctl --user` to manage user services.
     
-

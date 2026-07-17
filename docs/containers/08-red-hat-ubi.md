@@ -1,27 +1,19 @@
 > [!NOTE]
-> This document is a sanitized portfolio version of work completed in an internship lab. Internal hostnames, IP addresses, usernames, organization-specific identifiers, credentials, and private infrastructure details have been replaced with examples. Commands must be adapted and reviewed before use in another environment.
+> This is a sanitized copy of an internship lab document. Names, addresses, credentials, and other internal details use placeholders. Review the commands before applying them elsewhere.
 
-**Types of UBI-images**
-	1) UBI Standard
-	2) UBI Minimal
-	3) UBI Micro
-	4) UBI Init
+# Red Hat Universal Base Images
 
-**UBI Standard**
+Red Hat publishes four main Universal Base Image (UBI) variants:
 
-```bash
+1. **Standard:** the general-purpose image. It includes DNF and balances image size with package availability.
+2. **Minimal:** a smaller image with `microdnf` instead of the full DNF stack.
+3. **Micro:** the smallest variant. It has no package manager and is intended for applications that bring only their runtime dependencies.
+4. **Init:** includes `systemd` for workloads that need an init system inside the container.
 
-- Default "general purpose" image 
-  --> Strikes a balance between size and functionality
-Key Features:
-- Includes the full yum/dnf package manager
+## Adding software to UBI Micro
 
+Because UBI Micro has no package manager, packages cannot be installed in the final image directly. Use a multi-stage build: install the required files in a UBI builder stage, then copy the prepared filesystem into the Micro stage. This keeps the final image small without giving up package-based installation during the build.
 
--------------------------------------------------------------------
-Installing Python on the smallest possible image is not directly possible due to the nature of the image (lacks package manager)
+## Reference
 
-We can however use a %ulti-Stage build
-
-
-
-https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/8/html/building_running_and_managing_containers/assembly_adding-software-to-a-ubi-container_building-running-and-managing-containers#proc_using-the-ubi-micro-images_assembly_adding-software-to-a-ubi-container
+- [Adding software to a UBI container](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/8/html/building_running_and_managing_containers/assembly_adding-software-to-a-ubi-container_building-running-and-managing-containers#proc_using-the-ubi-micro-images_assembly_adding-software-to-a-ubi-container)
