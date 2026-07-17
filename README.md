@@ -69,18 +69,6 @@ Run the local preflight check before every push:
 ./scripts/preflight.sh
 ```
 
-## Publish from WSL
-
-After extracting the repository inside WSL, verify the files and publish them with:
-
-```bash
-cd ~/projects/linux-devops-infrastructure-labs
-./scripts/preflight.sh
-./scripts/publish-to-github.sh linux-devops-infrastructure-labs public
-```
-
-The publishing script uses the GitHub CLI, initializes Git, creates the first commit and publishes the repository under `TimurKhakimovPXL`. Change `public` to `private` for a private repository.
-
 ## Scope
 
 These documents record what I built and what went wrong along the way; they are not one-click production recipes. Each guide states its version and environment assumptions. Check the commands against current vendor documentation before using them in production.
