@@ -1,0 +1,39 @@
+# Secrets and credentials
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.kubeconfig
+kubeconfig
+pull-secret*
+*token*
+*password*
+*.vault
+.vault_pass*
+auth.json
+
+# Backups and archives
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.bak
+*.backup
+*.dump
+
+# Local tooling
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+
+# Generated logs and state
+*.log
+.cache/
+.tmp/
+tmp/
