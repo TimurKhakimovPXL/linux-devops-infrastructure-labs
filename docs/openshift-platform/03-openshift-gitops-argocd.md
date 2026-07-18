@@ -17,10 +17,10 @@ GitOps is an operational model where a **Git repository is the single source of 
 
 The reconciliation loop:
 
-```
+```text
 Developer commits manifest → Git repository (GitLab)
                                       ↓
-                          ArgoCD polls repo every 3 minutes
+                          ArgoCD polls repo on its reconciliation interval
                                       ↓
                     ArgoCD detects diff between Git and cluster
                                       ↓
@@ -53,8 +53,9 @@ For this lab, that gives us:
 | 1.18.x | 3.1.6 | 4.14, 4.16–4.20 |
 | 1.17.x | 3.0.12 | 4.12–4.19 |
 
-> [!note] Breaking change in 1.19
-> The default resource tracking method changed from **label-based** to **annotation-based**. On a fresh install this requires no action. When upgrading from 1.18.x, remediation steps are required.
+> [!NOTE]
+> **Resource tracking compatibility**
+> The bundled Argo CD 3.x upstream default is annotation-based tracking, but the Red Hat OpenShift GitOps Operator preserves label-based tracking by default for compatibility. Do not assume an upgrade changed the method; inspect the ArgoCD CR and generated configuration before planning a tracking migration.
 
 ---
 
@@ -64,13 +65,13 @@ For this lab, that gives us:
 
 The repository already exists and contains the manifests used in this lab:
 
-```
+```text
 http://gitlab.lab.example.internal/YOUR_GITLAB_USER/openshift-gitops.git
 ```
 
 **Repository structure:**
 
-```
+```text
 openshift-gitops/
 ├── README.md
 ├── apps/
@@ -91,8 +92,11 @@ ArgoCD needs read access to the private repository. The GitLab Personal Access T
 | Scopes | `read_repository` only |
 | Storage | `~/.argocd-gitlab-token` on the jump VM (chmod 600) |
 
-> [!warning] Token Security
+> [!WARNING]
+> **Token Security**
 > Never paste tokens into chat interfaces, commit them to Git, or store them in world-readable files. The token is stored with `chmod 600` and referenced via shell variable during Secret creation.
+
+This target records the original HTTP-only GitLab stage. The PAT therefore crosses the private lab network without TLS. Target 4 replaces this with HTTPS and CA validation; do not reuse the HTTP setup on an untrusted network.
 
 ### 2.3 Cluster Access
 
@@ -104,7 +108,8 @@ oc get nodes
 ```
 
 Expected output:
-```
+
+```console
 NAME      STATUS   ROLES                         AGE   VERSION
 master0   Ready    control-plane,master,worker   12d   v1.34.4
 ```
@@ -135,7 +140,7 @@ spec:
 EOF
 ```
 
-An `OperatorGroup` scopes which namespaces an operator watches. The `upgradeStrategy: Default` means OLM manages upgrades automatically within the subscribed channel.
+An `OperatorGroup` scopes which namespaces an operator watches. `upgradeStrategy: Default` keeps OLM's normal CSV replacement behavior. Automatic approval of later updates is set on the Subscription below, not by this field.
 
 ### 3.3 Create the Subscription
 
@@ -147,7 +152,7 @@ metadata:
   name: openshift-gitops-operator
   namespace: openshift-gitops-operator
 spec:
-  channel: latest
+  channel: gitops-1.19
   installPlanApproval: Automatic
   name: openshift-gitops-operator
   source: redhat-operators
@@ -155,7 +160,7 @@ spec:
 EOF
 ```
 
-The `Subscription` tells OLM which operator to install, from which catalog (`redhat-operators`), and on which update channel (`latest`). `installPlanApproval: Automatic` means upgrades within the channel apply without manual approval.
+The `Subscription` tells OLM which operator to install, from which catalog (`redhat-operators`), and on which minor channel (`gitops-1.19`). `installPlanApproval: Automatic` allows later 1.19.x updates, so the observed 1.19.2 CSV below is evidence from this run rather than a permanent pin.
 
 ### 3.4 Verify Installation
 
@@ -166,7 +171,8 @@ oc get csv -n openshift-gitops-operator -w
 ```
 
 Expected progression:
-```
+
+```console
 NAME                                DISPLAY                    VERSION   PHASE
 openshift-gitops-operator.v1.19.2   Red Hat OpenShift GitOps   1.19.2    Pending
 openshift-gitops-operator.v1.19.2   Red Hat OpenShift GitOps   1.19.2    InstallReady
@@ -180,7 +186,7 @@ Installation is complete when `PHASE` shows `Succeeded`.
 
 ## 4. Step 2: Verify the ArgoCD Instance
 
-After the operator reaches `Succeeded`, it **automatically provisions** a fully configured ArgoCD instance in the `openshift-gitops` namespace. No additional configuration is required.
+After the operator reaches `Succeeded`, its default installation provisions an ArgoCD instance in the `openshift-gitops` namespace. The remaining steps configure repository access and target-namespace permissions.
 
 ### 4.1 Verify All Pods Are Running
 
@@ -188,9 +194,9 @@ After the operator reaches `Succeeded`, it **automatically provisions** a fully 
 oc get pods -n openshift-gitops
 ```
 
-Expected output (all 8 pods must be Running):
+The recorded installation had these eight running pods. Names and counts can differ after operator updates, so verify readiness rather than matching hashes exactly.
 
-```
+```console
 NAME                                                          READY   STATUS
 cluster-58ff748fd6-qlbqz                                      1/1     Running
 gitops-plugin-5966f98946-t2l8h                                1/1     Running
@@ -220,7 +226,8 @@ oc get argocd openshift-gitops -n openshift-gitops -o jsonpath='{.status.phase}{
 ```
 
 Expected output:
-```
+
+```text
 Available
 ```
 
@@ -233,7 +240,8 @@ oc get route openshift-gitops-server -n openshift-gitops -o jsonpath='{.spec.hos
 ```
 
 The URL resolves to:
-```
+
+```text
 https://openshift-gitops-server-openshift-gitops.apps.lab.example.internal
 ```
 
@@ -241,7 +249,8 @@ This is covered by the existing wildcard DNS record `*.apps.lab.example.internal
 
 ### 4.4 Retrieve the Admin Password
 
-> [!warning] OpenShift GitOps does NOT use `argocd-initial-admin-secret`
+> [!WARNING]
+> **OpenShift GitOps does NOT use `argocd-initial-admin-secret`**
 > The upstream ArgoCD admin secret does not exist in OpenShift GitOps. The password is stored in a secret named `openshift-gitops-cluster` in the `openshift-gitops` namespace.
 
 ```bash
@@ -271,12 +280,13 @@ stringData:
   type: git
   url: http://gitlab.lab.example.internal/YOUR_GITLAB_USER/openshift-gitops.git
   username: YOUR_GITLAB_USER
-  password: "<GITLAB_TOKEN>"
-  insecure: "true"
+  password: "${GITLAB_TOKEN}"
 EOF
+
+unset GITLAB_TOKEN
 ```
 
-`insecure: "true"` is required because the GitLab instance uses HTTP only: no TLS certificate is present for ArgoCD to verify.
+Because this repository URL uses plain HTTP, there is no server certificate to verify. An `insecure` TLS flag would not add protection, so it is omitted. Target 4 changes the URL to HTTPS and installs the lab CA for ArgoCD.
 
 **Verify the Secret was created correctly:**
 
@@ -320,9 +330,9 @@ oc label namespace sample-app argocd.argoproj.io/managed-by=openshift-gitops
 oc get rolebindings -n sample-app
 ```
 
-Expected output: the operator creates these automatically upon seeing the label:
+Expected output from this run; the operator-created bindings are the important entries:
 
-```
+```console
 NAME                                             ROLE                                                  AGE
 openshift-gitops-argocd-application-controller   Role/openshift-gitops-argocd-application-controller   15s
 openshift-gitops-argocd-server                   Role/openshift-gitops-argocd-server                   15s
@@ -374,7 +384,7 @@ EOF
 
 | Field | Value | Why |
 |---|---|---|
-| `namespace` (metadata) | `openshift-gitops` | Application CRs must live in the ArgoCD control plane namespace |
+| `namespace` (metadata) | `openshift-gitops` | This default ArgoCD instance reads Application CRs from its control-plane namespace |
 | `project` | `default` | The default AppProject has no source/destination restrictions |
 | `repoURL` | GitLab HTTP URL | The repo ArgoCD will clone |
 | `targetRevision` | `main` | Git branch to track |
@@ -382,9 +392,9 @@ EOF
 | `destination.server` | `https://kubernetes.default.svc` | Local cluster (the one ArgoCD runs on) |
 | `destination.namespace` | `sample-app` | Target namespace for all deployed resources |
 | `automated.prune` | `true` | Delete cluster resources when removed from Git |
-| `automated.selfHeal` | `true` | Revert manual cluster changes within 5 seconds |
+| `automated.selfHeal` | `true` | Revert detected manual cluster changes during reconciliation |
 | `CreateNamespace=false` | - | Namespace already exists and is labeled, so do not recreate it |
-| `ServerSideApply=true` | - | Recommended for OpenShift; avoids annotation size limit errors |
+| `ServerSideApply=true` | - | Use server-side apply for this lab's managed resources and avoid the client-side apply annotation-size limit |
 
 ---
 
@@ -398,7 +408,8 @@ oc get application sample-app -n openshift-gitops \
 ```
 
 Expected output:
-```
+
+```text
 Sync: Synced, Health: Healthy
 ```
 
@@ -409,7 +420,8 @@ oc get pods -n sample-app
 ```
 
 Expected output:
-```
+
+```console
 NAME                          READY   STATUS    RESTARTS   AGE
 sample-app-66ccd96b9b-dn6ld   1/1     Running   0          19s
 ```
@@ -435,7 +447,8 @@ Sync status and health status are **independent**:
 | `Degraded` | One or more resources are failing: `CrashLoopBackOff`, `ImagePullBackOff`, zero ready replicas |
 | `Missing` | Resources defined in Git do not exist in the cluster |
 
-> [!note] An application can be `Synced` but `Degraded`
+> [!NOTE]
+> **An application can be `Synced` but `Degraded`**
 > `Synced` only says that ArgoCD applied the manifests. The workload can still be `Degraded`, so check both values.
 
 ---
@@ -483,16 +496,18 @@ spec:
 
 **Why this specific security context:**
 
-OpenShift enforces Security Context Constraints (SCCs) on every pod. The default SCC for new namespaces is `restricted-v2`, which requires:
+OpenShift enforces Security Context Constraints (SCCs) on every pod. This manifest makes its intended `restricted-v2` boundary explicit:
 
-| Requirement | Field |
+| Intent | Field |
 |---|---|
 | No privilege escalation | `allowPrivilegeEscalation: false` |
 | No root execution | `runAsNonRoot: true` |
 | Seccomp profile | `seccompProfile.type: RuntimeDefault` |
 | No Linux capabilities | `capabilities.drop: ["ALL"]` |
 
-A pod that omits any of these fields will be **rejected by the admission controller** before it is scheduled. OpenShift will assign a random UID from the namespace's allowed range automatically: no `runAsUser` is needed.
+The explicit settings keep the workload within the intended `restricted-v2` boundary. The SCC can default some values, including a UID from the namespace's allowed range, so omission is not automatically a rejection; a value that conflicts with the admitted SCC is rejected. No fixed `runAsUser` is needed here.
+
+The recorded manifest uses the mutable `ubi-minimal:latest` tag. For a repeatable deployment, resolve and record an approved image digest in the Git repository before rerunning the lab.
 
 The `namespace:` field is intentionally absent from the manifest. The destination namespace is declared in the ArgoCD `Application` CR, not in individual manifests. This keeps manifests portable and avoids conflicts.
 
@@ -500,33 +515,33 @@ The `namespace:` field is intentionally absent from the manifest. The destinatio
 
 ## 10. Architecture Overview
 
-```
+```text
   Windows Workstation (Tailscale)
            │
            │ https://openshift-gitops-server-openshift-gitops
            │       .apps.lab.example.internal
            ▼
-  ┌─────────────────────────────────────────────────────────┐
-  │                SNO Cluster (192.168.50.20)                │
-  │                                                         │
-  │  namespace: openshift-gitops                            │
-  │  ┌───────────────────────────────────────────────────┐  │
-  │  │  ArgoCD                                           │  │
-  │  │  ┌──────────────┐    ┌─────────────────────────┐  │  │
-  │  │  │ repo-server  │───▶│ application-controller  │  │  │
-  │  │  │ (clones Git) │    │ (reconciles cluster)    │  │  │
-  │  │  └──────┬───────┘    └───────────┬─────────────┘  │  │
-  │  └─────────┼─────────────────────────┼───────────────┘  │
-  │            │                         │                   │
-  │            │ clone                   │ apply             │
-  │            ▼                         ▼                   │
-  │  gitlab.lab.example.internal     namespace: sample-app         │
-  │  (192.168.50.30)             ┌─────────────────────┐       │
-  │                            │  Deployment         │       │
-  │  /YOUR_GITLAB_USER/openshift-gitops   │  ReplicaSet         │       │
-  │  apps/sample-app/          │  Pod (ubi-minimal)  │       │
-  │  deployment.yaml           └─────────────────────┘       │
-  └─────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────┐
+  │                   SNO Cluster (192.168.50.20)                    │
+  │                                                                  │
+  │  namespace: openshift-gitops                                     │
+  │  ┌────────────────────────────────────────────────────────────┐  │
+  │  │  ArgoCD                                                    │  │
+  │  │  ┌──────────────┐    ┌──────────────────────────┐          │  │
+  │  │  │ repo-server  │───▶│ application-controller   │          │  │
+  │  │  │ (clones Git) │    │ (reconciles cluster)     │          │  │
+  │  │  └──────┬───────┘    └────────────┬─────────────┘          │  │
+  │  └─────────┼─────────────────────────┼────────────────────────┘  │
+  │            │ clone                   │ apply                     │
+  │            ▼                         ▼                           │
+  │  gitlab.lab.example.internal     namespace: sample-app           │
+  │  (192.168.50.30)                 ┌──────────────────────┐        │
+  │                                  │ Deployment           │        │
+  │  /YOUR_GITLAB_USER/              │ ReplicaSet           │        │
+  │    openshift-gitops              │ Pod (ubi-minimal)    │        │
+  │    /apps/sample-app/             └──────────────────────┘        │
+  │    deployment.yaml                                               │
+  └──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -536,7 +551,7 @@ The `namespace:` field is intentionally absent from the manifest. The destinatio
 | Issue | Symptoms | Fix |
 |---|---|---|
 | Application stuck `OutOfSync` | Sync never completes, no error | Check repo-server logs: `oc logs -n openshift-gitops -l app.kubernetes.io/name=argocd-repo-server` |
-| Repo connection failed | Application shows `ComparisonError` | Verify Secret label, URL, token. Check `insecure: "true"` is set for HTTP repos |
+| Repo connection failed | Application shows `ComparisonError` | Verify the Secret label, repository URL, token scope, and network reachability. HTTP has no certificate validation; move to the HTTPS setup in Target 4. |
 | Pod rejected by SCC | `oc get pods` shows `Error` or `CreateContainerConfigError` | Add required `securityContext` fields: `allowPrivilegeEscalation: false`, `runAsNonRoot: true`, `seccompProfile`, `capabilities.drop: ALL` |
 | RBAC forbidden on deploy | ArgoCD shows `deployments.apps is forbidden` | Verify namespace label: `oc get namespace sample-app --show-labels` |
 | ArgoCD UI inaccessible | Browser cannot reach console URL | Verify wildcard DNS: `Resolve-DnsName openshift-gitops-server-openshift-gitops.apps.lab.example.internal` returns `192.168.50.20` |
@@ -557,4 +572,4 @@ The `namespace:` field is intentionally absent from the manifest. The destinatio
 | Application CR | `sample-app` | `openshift-gitops` |
 | Application Controller SA | `openshift-gitops-argocd-application-controller` | `openshift-gitops` |
 | Namespace management label | `argocd.argoproj.io/managed-by=openshift-gitops` | On target namespace |
-| OLM channel | `latest` (resolves to `gitops-1.19`) | - |
+| OLM channel | `gitops-1.19` | - |

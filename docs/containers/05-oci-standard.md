@@ -7,7 +7,7 @@
 
 Explain the Open Container Initiative (OCI) specifications and how they let tools such as Podman, Docker, containerd, and registries work together.
 
-# 1. What Is OCI?
+## 1. What Is OCI?
 
 The **Open Container Initiative (OCI)** maintains open, vendor-neutral specifications for:
 
@@ -19,7 +19,7 @@ These shared formats and interfaces prevent each container engine and registry f
 
 ---
 
-# 2. Why OCI Exists 
+## 2. Why OCI Exists
 
 Early container tools used incompatible image formats and registry interfaces. OCI gave engines and registries a common set of specifications now used across Podman, Docker, CRI-O, containerd, Kubernetes, and other projects.
 
@@ -27,7 +27,7 @@ In practice, an OCI image built with one engine can usually be pushed to a stand
 
 ---
 
-# 3. The three OCI specifications
+## 3. The three OCI specifications
 
 ### OCI Image Specification
 
@@ -66,7 +66,7 @@ Defines the registry API used to transfer images and related artifacts:
 - Content-addressable layers (SHA256)  
 - Manifest lists (multi-arch images)  
 
-Registries implementing this spec:
+Common registries offering OCI-compatible distribution APIs include:
 - Quay.io  
 - Docker Hub  
 - GHCR  
@@ -76,7 +76,7 @@ For example, an image pushed to Quay with Podman can be pulled with Docker, prov
 
 ---
 
-# 4. Why OCI matters
+## 4. Why OCI matters
 
 Podman and Docker understand the same standard image formats. An image built with:
 

@@ -15,11 +15,12 @@ The SNO VM needs at least:
 
 - **CPU:** Minimum 8 vCPUs (16+ recommended for production workloads).
 - **RAM:** Minimum 16 GB (64 GB recommended).
-- **Storage:** 120 GB minimum with high IOPS (strictly required for the `etcd` database: see storage warning below).
+- **Storage:** 120 GB minimum on storage with low, consistent write latency (see the observed storage problem below).
 - **Network:** 1 static public/private IP address assigned to the server.
 
-> [!danger] Storage performance matters
-> etcd requires a minimum of ~50 MB/s sequential write speed with `dsync`. On Proxmox, **qcow2 images on directory-based (`local`) storage** deliver ~2 MB/s dsync writes: far too slow. This causes the bootstrap kube-apiserver to fail its startup probes because RBAC data cannot be persisted to etcd in time.
+> [!CAUTION]
+> **Storage performance matters**
+> In this lab, qcow2 on directory-based (`local`) storage measured about 2 MB/s in a small `dsync` test and the bootstrap API repeatedly failed while writing RBAC data to etcd. Moving the disk to LVM thin storage raised the same rough measurement to about 1.5 GB/s and the install completed. Throughput from this `dd` command is troubleshooting evidence, not a universal etcd acceptance threshold; sustained fsync latency is the more relevant measure.
 >
 > **Use LVM thin provisioning** for the VM disk. Raw volumes on LVM deliver ~1.5 GB/s, which is more than sufficient.
 >
@@ -40,7 +41,7 @@ OpenShift needs its API and application hostnames to resolve before the installa
 
 Add these records to the internal BIND server:
 
-| **Record Type**  | **Name (cluster: stage-project, domain: example.internal)** | **Target IP** | **Purpose**                                         |
+| **Record Type**  | **Name (cluster: lab, domain: example.internal)** | **Target IP** | **Purpose**                                         |
 | ---------------- | --------------------------------------------------------- | ------------- | --------------------------------------------------- |
 | **A**            | `api.lab.example.internal`                        | `<Server_IP>` | External access to the cluster API and Web Console. |
 | **A**            | `api-int.lab.example.internal`                    | `<Server_IP>` | Internal communication between cluster components.  |
@@ -54,12 +55,14 @@ Reserve `192.168.50.20` for the SNO node's MAC address.
 2. Add the host entry to your DHCP configuration:
 
 ```bash
-# On the Proxmox host (dnsmasq runs here)
-echo "dhcp-host=52:54:00:AA:BB:CC,192.168.50.20,master0" >> /etc/dnsmasq.conf
+# Run as root on the Proxmox host; replace the example MAC if needed.
+DHCP_HOST="dhcp-host=52:54:00:AA:BB:CC,192.168.50.20,master0"
+grep -qxF "$DHCP_HOST" /etc/dnsmasq.conf || echo "$DHCP_HOST" >> /etc/dnsmasq.conf
 systemctl restart dnsmasq
 ```
 
-> [!warning] DHCP Lease Conflicts
+> [!WARNING]
+> **DHCP Lease Conflicts**
 > If you are recreating a VM with a new MAC address, the old lease for `192.168.50.20` may still be active in `/var/lib/misc/dnsmasq.leases`, causing the new VM to receive an IP from the dynamic pool instead.
 >
 > **Fix:** Stop dnsmasq, delete the stale lease line from `/var/lib/misc/dnsmasq.leases`, then restart dnsmasq before booting the new VM.
@@ -76,22 +79,22 @@ The Proxmox firewall must be disabled on this VM because the lab's default rules
 
 The API and application FQDNs must resolve to the node IP (`192.168.50.20`).
 
-#### 2.4 Global Options (`/etc/named.conf`)
+### 2.4 Global Options (`/etc/named.conf`)
 
 Modify the `options {}` block to allow queries from your local subnet:
 
-```
+```conf
 listen-on port 53 { any; };
 allow-query     { localhost; 192.168.50.0/24; };
 allow-recursion { localhost; 192.168.50.0/24; };
 forwarders { 1.1.1.1; 8.8.8.8; };
 ```
 
-#### 2.5 Zone Definitions (`/etc/named.conf`)
+### 2.5 Zone Definitions (`/etc/named.conf`)
 
 Add the forward and reverse lookup zones:
 
-```bash
+```conf
 zone "example.internal" IN {
     type master;
     file "example.internal.zone";
@@ -109,7 +112,7 @@ zone "50.168.192.in-addr.arpa" IN {
 
 This file maps the OpenShift API and wildcard apps to the SNO IP.
 
-```plaintext
+```dns
 $TTL 1W
 @       IN      SOA     ns1.example.internal.     root.example.internal. (
                         2026022700      ; serial (YYYYMMDD00)
@@ -128,9 +131,9 @@ api-int.lab.example.internal.   IN      A       192.168.50.20
 master0.lab.example.internal.   IN      A       192.168.50.20
 ```
 
-#### 2.7 Reverse Zone File (`/var/named/50.168.192.rev`)
+### 2.7 Reverse Zone File (`/var/named/50.168.192.rev`)
 
-```plaintext
+```dns
 $TTL 1W
 @       IN      SOA     ns1.example.internal.     root.example.internal. (
                         2026022700      ; serial
@@ -140,7 +143,7 @@ $TTL 1W
 20      IN      PTR     master0.lab.example.internal.
 ```
 
-#### 2.8 Syntax Validation
+### 2.8 Syntax Validation
 
 ```bash
 sudo named-checkconf /etc/named.conf
@@ -155,18 +158,27 @@ sudo systemctl restart named
 
 Red Hat provides several ways to do the installation (Manual, CoreOS, Assisted). We will be following the **CoreOS path**.
 
-#### 3.1 Pull Secret
+### 3.1 Pull Secret
 
 - Download the pull secret from the Red Hat Hybrid Console.
-- Extract the raw JSON string:
+- Store it as `pull-secret.txt` on the jump VM and verify that it is valid JSON:
 
 ```bash
-CLEAN_SECRET=$(jq -c . pull-secret.txt)
+jq -e . pull-secret.txt >/dev/null
 ```
 
-#### 3.2 Create the `install-config.yaml` Blueprint
+The pull secret is environment-specific and is not included in this repository. Keep the file out of version control and paste the compact output of `jq -c . pull-secret.txt` into `install-config.yaml` only on the secured jump VM.
 
-Create a dedicated installation directory (`mkdir ~/sno-install && cd ~/sno-install`). Generate the blueprint file, ensuring `bootstrapInPlace` is declared at the root level to force the Single Node topology.
+### 3.2 Create the `install-config.yaml` Blueprint
+
+Create a dedicated installation directory on the jump VM:
+
+```bash
+mkdir -p "$HOME/sno-install"
+cd "$HOME/sno-install"
+```
+
+Create `install-config.yaml` there, ensuring `bootstrapInPlace` is declared at the root level to force the Single Node topology. Replace the pull-secret and SSH-key placeholders locally.
 
 `bootstrapInPlace` → bootstrap AND control plane run on the same machine.
 
@@ -174,33 +186,34 @@ Create a dedicated installation directory (`mkdir ~/sno-install && cd ~/sno-inst
 apiVersion: v1
 baseDomain: example.internal
 metadata:
-  name: stage-project
+  name: lab
 compute:
-- name: worker
-  replicas: 0
+  - name: worker
+    replicas: 0
 controlPlane:
   name: master
   replicas: 1
 networking:
   networkType: OVNKubernetes
   machineNetwork:
-  - cidr: 192.168.50.0/24
+    - cidr: 192.168.50.0/24
 platform:
   none: {}
 bootstrapInPlace:
   installationDisk: /dev/sda
-pullSecret: '{"auths":{"cloud.openshift.com":{"auth":"..."}}}'
-sshKey: 'ssh-rsa AAAAB3NzaC1...'
+pullSecret: '<compact JSON from pull-secret.txt>'
+sshKey: '<public SSH key for the core user>'
 ```
 
-> [!note] `installationDisk: /dev/sda`
+> [!NOTE]
+> **`installationDisk: /dev/sda`**
 > This tells `coreos-installer` where to write the final OS: it is **not** the boot source. The VM boots from the ISO in RAM; `/dev/sda` must be a blank, unmounted disk at install time.
 
 ---
 
 ## 4. Step 3: Generating and Embedding Ignition Data
 
-#### 4.1 Generate the SNO Ignition File
+### 4.1 Generate the SNO Ignition File
 
 Convert the YAML blueprint into an automated provisioning script (Ignition). Use the single-node specific subcommand to prevent the installer from expecting a 3-node HA architecture.
 
@@ -210,26 +223,27 @@ openshift-install create single-node-ignition-config --dir=.
 
 This generates a `bootstrap-in-place-for-live-iso.ign` file, alongside an `auth/` directory containing your initial cluster credentials.
 
-#### 4.2 Embed Ignition into the Bootable ISO
+### 4.2 Embed Ignition into the Bootable ISO
 
-> [!danger] Critical: Use `--live-ignition`, NOT `--dest-ignition`
+> [!CAUTION]
+> **Critical: Use `--live-ignition`, NOT `--dest-ignition`**
 > The bootstrap-in-place flow **must** run entirely in the live ISO environment (in RAM). The ignition config must be embedded as a **live ignition** so the full bootstrap process (bootkube, MCS, `install-to-disk.service`) executes while `/dev/sda` is unmounted.
 >
 > Using `--dest-ignition` instead embeds the ignition into the installed OS on disk. This causes `install-to-disk.service` to fail with `"Error: checking for exclusive access to /dev/sda: found busy partitions"` because the OS is already running from the disk it needs to overwrite.
 
 ```bash
 coreos-installer iso customize \
-    --dest-device /dev/sda \
-    --live-ignition bootstrap-in-place-for-live-iso.ign \
-    -o sno-installer.iso \
-    rhcos-live.x86_64.iso
+  --dest-device /dev/sda \
+  --live-ignition bootstrap-in-place-for-live-iso.ign \
+  -o sno-installer.iso \
+  rhcos-live.x86_64.iso
 ```
 
 **Ignition file contains:** cluster configuration, systemd units, kubelet configuration, CRI-O configuration, networking, and bootstrap services.
 
 **`rhcos-live.x86_64.iso` contains:** kernel, initramfs, live root filesystem, and `coreos-installer`.
 
-#### 4.3 Boot Sequence (Bootstrap-in-Place)
+### 4.3 Boot Sequence (Bootstrap-in-Place)
 
 The SNO bootstrap-in-place flow has two distinct phases:
 
@@ -255,7 +269,7 @@ The SNO bootstrap-in-place flow has two distinct phases:
 15. Permanent control plane starts (etcd, kube-apiserver, kube-controller-manager, kube-scheduler)
 16. Cluster operators deploy and stabilize
 
-#### 4.4 Sanity Check
+### 4.4 Sanity Check
 
 Verify the injection was successful before uploading to the server:
 
@@ -267,14 +281,18 @@ coreos-installer iso ignition show sno-installer.iso
 
 ## 5. Step 4: Proxmox Storage Setup
 
-> [!danger] Do NOT use directory-based (`local`) storage for the SNO disk
-> qcow2 on directory storage delivers ~2 MB/s dsync write speed. etcd requires ~50+ MB/s. The bootstrap will fail repeatedly with kube-apiserver startup probe errors (`poststarthook/rbac/bootstrap-roles failed`).
+> [!CAUTION]
+> **Do NOT use directory-based (`local`) storage for the SNO disk**
+> qcow2 on directory storage delivered about 2 MB/s in this lab's `dsync` test, alongside repeated kube-apiserver startup-probe failures (`poststarthook/rbac/bootstrap-roles failed`). This is an observed failure mode, not a claim that every directory-backed Proxmox disk will have the same result.
 
-#### 5.1 Create LVM Thin Storage
+### 5.1 Create LVM Thin Storage
 
-If your Proxmox host has an unused disk (e.g., `/dev/sdb`):
+If the Proxmox host has a verified unused disk such as `/dev/sdb`, run the following as root on that host. `pvcreate` destroys existing filesystem metadata on its target, so confirm the device with `lsblk` before continuing and replace the example storage names if the host uses different ones.
 
 ```bash
+# Confirm that /dev/sdb is the intended unused disk.
+lsblk -f /dev/sdb
+
 # Create physical volume
 pvcreate /dev/sdb
 
@@ -295,18 +313,19 @@ pvesm status
 
 ## 6. Step 5: Bare Metal Deployment
 
-#### 6.1 Secure Copy (SCP) to the Host
+### 6.1 Secure Copy (SCP) to the Host
 
-Copy the ISO over the internal LAN bridge. This is faster and avoids NAT reflection problems:
+From the jump VM's `~/sno-install` directory, copy the ISO over the internal LAN bridge. The destination assumes the Proxmox storage ID `local`; use the ISO directory configured for that host if it differs.
 
 ```bash
 scp sno-installer.iso root@192.168.50.1:/var/lib/vz/template/iso/
 ```
 
-> [!note] Routing
+> [!NOTE]
+> **Routing**
 > Attempting to `scp` to the external IP (e.g., `100.64.0.10`) from within the internal virtual network may result in connection timeouts due to missing outbound NAT reflection rules. Using the internal gateway (`192.168.50.1`) ensures a direct layer-2 transfer (~500MB/s).
 
-#### 6.2 Create and Configure the VM in Proxmox
+### 6.2 Create and Configure the VM in Proxmox
 
 Create the VM with these settings:
 
@@ -323,16 +342,18 @@ Create the VM with these settings:
 | **QEMU Agent**      | Disabled (not included in RHCOS)               |
 | **NUMA**            | Disabled (single-socket host)                  |
 
-#### 6.3 Boot Procedure
+### 6.3 Boot Procedure
 
-> [!danger] Critical: ISO Ejection During Reboot
+> [!CAUTION]
+> **Critical: ISO Ejection During Reboot**
 > The bootstrap-in-place flow ends with `install-to-disk.service` writing the permanent OS to `/dev/sda` and scheduling a reboot with a 60-second countdown. During this window, you **must** eject the ISO so the VM boots from disk on the next reboot. If the ISO is still attached, the VM will boot the ISO again and overwrite the permanent OS.
 
 **Procedure:**
 
 1. **Set boot order** to CD-ROM (ide2) first, then hard disk (scsi0):
    ```bash
-   qm set <VMID> --boot order='ide2;scsi0;net0'
+   VM_ID=123  # replace with the lab VM ID
+   qm set "$VM_ID" --boot order='ide2;scsi0;net0'
    ```
 
 2. **Start the VM.** It boots from the ISO into RAM.
@@ -344,38 +365,43 @@ Create the VM with these settings:
    ```
 
 4. **Wait for the install-to-disk completion message:**
-   ```
+   ```text
    Bootstrap completed, server is going to reboot.
    The system will reboot at <time>!
    ```
 
 5. **Immediately eject the ISO** (you have 60 seconds):
    ```bash
-   qm set <VMID> --ide2 none,media=cdrom
+   VM_ID=123  # use the same lab VM ID as above
+   qm set "$VM_ID" --ide2 none,media=cdrom
    ```
 
 6. **The VM reboots from disk.** Ignition applies the full machine config. The MCD firstboot service runs, pulls images, and the node reboots once more.
 
 7. **The permanent control plane starts.** The bootstrap etcd member is removed, operators deploy, and the cluster stabilizes.
 
-> [!tip] No manual boot order flipping needed
+> [!TIP]
+> **No manual boot order flipping needed**
 > Unlike the `--dest-ignition` approach, with `--live-ignition` the entire bootstrap runs in the live ISO. You only need to eject the ISO once during the 60-second reboot countdown. The node handles everything else automatically.
 
-#### 6.4 Clean Rebuild Procedure
+### 6.4 Clean Rebuild Procedure
 
-If you need to start fresh for any reason:
+If you need to start fresh, run this as root on the Proxmox host. It permanently deletes the selected VM disk. Set `VM_ID` to the lab VM, verify the resulting LV path with `lvs`, and do not run it against a VM that must be retained. The storage names `vm-storage` and `vm-thin`, bridge `vmbr1`, and ISO store `local` are specific to this Proxmox host and must be replaced on a different installation.
 
 ```bash
-# Stop the VM
-qm stop <VMID>
+VM_ID=123  # replace with the lab VM ID
 
-# Wipe the LVM disk
-lvremove -f vm-storage/vm-<VMID>-disk-0
-lvcreate -V 200G -T vm-storage/vm-thin -n vm-<VMID>-disk-0
+# Stop the VM
+qm stop "$VM_ID"
+
+# Verify and then delete the lab VM's LVM disk.
+lvs "vm-storage/vm-${VM_ID}-disk-0"
+lvremove -f "vm-storage/vm-${VM_ID}-disk-0"
+lvcreate -V 200G -T vm-storage/vm-thin -n "vm-${VM_ID}-disk-0"
 
 # Re-attach the ISO
-qm set <VMID> --ide2 local:iso/sno-installer.iso,media=cdrom
-qm set <VMID> --boot order='ide2;scsi0;net0'
+qm set "$VM_ID" --ide2 local:iso/sno-installer.iso,media=cdrom
+qm set "$VM_ID" --boot order='ide2;scsi0;net0'
 
 # Clear any stale DHCP leases if the MAC changed
 systemctl stop dnsmasq
@@ -389,7 +415,7 @@ Then repeat from step 6.3.
 
 ## 7. Step 6: Monitoring the Installation
 
-#### 7.1 Enable Logging (Before Starting the VM)
+### 7.1 Enable Logging (Before Starting the VM)
 
 **On the Proxmox host**: watch outbound NAT traffic:
 
@@ -405,7 +431,7 @@ sudo rndc querylog on
 sudo journalctl -u named -f
 ```
 
-#### 7.2 Wait for Bootstrap and Install
+### 7.2 Wait for Bootstrap and Install
 
 From the Admin Workstation / jump VM, run both stages sequentially:
 
@@ -431,7 +457,7 @@ Use `--log-level=debug` for maximum visibility during troubleshooting.
 6. `Working towards 4.21.4: X of 971 done` → operators deploying
 7. `Install complete!` → cluster is ready
 
-#### 7.3 On-Node Debugging (SSH)
+### 7.3 On-Node Debugging (SSH)
 
 If you need to inspect the node during bootstrap:
 
@@ -463,24 +489,26 @@ sudo rm /tmp/testfile
 
 ## 8. Step 7: Cluster Access and Validation
 
-#### 8.1 Export Credentials
+### 8.1 Export Credentials
 
 ```bash
 cd ~/sno-install
-export KUBECONFIG=$(pwd)/auth/kubeconfig
+export KUBECONFIG="$PWD/auth/kubeconfig"
 cat auth/kubeadmin-password
 ```
 
-#### 8.2 Login and Verify Node
+### 8.2 Login and Verify Node
 
 ```bash
-oc login -u kubeadmin -p $(cat auth/kubeadmin-password) https://api.lab.example.internal:6443
+oc login -u kubeadmin https://api.lab.example.internal:6443
 oc get nodes -o wide
 ```
 
+Enter the password from `auth/kubeadmin-password` at the prompt. Avoid putting it directly on the command line, where it can be exposed through process listings or shell history.
+
 Expected output: a single node in `Ready` state with `control-plane,master,worker` roles.
 
-#### 8.3 Cluster Health
+### 8.3 Cluster Health
 
 ```bash
 oc get clusterversion
@@ -489,54 +517,57 @@ oc get clusteroperators
 
 All cluster operators should show `Available=True`, `Progressing=False`, `Degraded=False`.
 
-#### 8.4 Web Console
+### 8.4 Web Console
 
 - URL: `https://console-openshift-console.apps.lab.example.internal`
 - Login with kubeadmin credentials.
 
-#### 8.5 Approve Pending CSRs (if any)
+### 8.5 Approve Pending CSRs (if any)
 
 ```bash
-oc get csr | grep Pending | awk '{print $1}' | xargs oc adm certificate approve
+oc get csr
+
+# After checking that the pending requests belong to this node:
+oc get csr --no-headers | awk '$5 == "Pending" {print $1}' | \
+  xargs -r oc adm certificate approve
 ```
 
 ---
 
 ## 9. Architecture Diagram
 
-```
-                              ┌──────────────┐
-                              │   Internet   │
-                              └──────┬───────┘
-                                     │
-                              ┌──────┴───────┐
-                              │ vmbr0 (Pub)  │
-                              └──────┬───────┘
-                                     │
-     ┌───────────────────────────────┼────────────────────────────┐
-     │              Proxmox Host (192.168.50.1)                     │
-     │                                                            │
-     │  tailscale0 ←── VPN admin access (100.64.0.0/10)           │
-     │  dnsmasq    ←── DHCP for vmbr1                             │
-     │  iptables   ←── NAT masquerade (vmbr1 → vmbr0)             │
-     │                                                            │
-     │              ┌────────────────────┐                        │
-     │              │  vmbr1 (Private)   │                        │
-     │              │  192.168.50.0/24     │                        │
-     │              └──┬───────┬────┬────┘                        │
-     └─────────────────┼───────┼────┼────────────────────────────-┘
-                       │       │    │
-          ┌────────────┘       │    └────────-──┐
-          │                    │                │
-   ┌──────┴──────┐    ┌────────┴──────┐   ┌─────┴──────-─┐
-   │ BIND DNS    │    │ SNO Cluster   │   │ Jump VM      │
-   │ 192.168.50.10 │    │ 192.168.50.20   │   │ 192.168.50.101 │
-   │             │    │               │   │              │
-   │ Zones:      │    │ OCP 4.21      │   │ oc CLI       │
-   │ local.      │    │ api.*         │   │ openshift-   │
-   │ internal    │    │ *.apps.*      │   │ install      │
-   └─────────────┘    │ Disk: LVM thin│   └─────────────-┘
-                      └───────────────┘
+```text
+                               ┌──────────────┐
+                               │   Internet   │
+                               └──────┬───────┘
+                                      │
+                               ┌──────┴───────┐
+                               │ vmbr0 (Pub)  │
+                               └──────┬───────┘
+                                      │
+     ┌────────────────────────────────┼──────────────────────────────┐
+     │                 Proxmox Host (192.168.50.1)                   │
+     │                                                               │
+     │  tailscale0 ←── VPN admin access (100.64.0.0/10)              │
+     │  dnsmasq    ←── DHCP for vmbr1                                │
+     │  iptables   ←── NAT masquerade (vmbr1 → vmbr0)                │
+     │                                                               │
+     │                 ┌────────────────────┐                        │
+     │                 │  vmbr1 (Private)   │                        │
+     │                 │  192.168.50.0/24   │                        │
+     │                 └──┬────────┬─────┬──┘                        │
+     └────────────────────┼────────┼─────┼───────────────────────────┘
+                          │        │     │
+          ┌───────────────┘        │     └────────────────┐
+          │                        │                      │
+   ┌──────┴───────────┐   ┌────────┴──────────┐   ┌───────┴────────────┐
+   │ BIND DNS         │   │ SNO Cluster       │   │ Jump VM            │
+   │ 192.168.50.10    │   │ 192.168.50.20     │   │ 192.168.50.101     │
+   │                  │   │                   │   │                    │
+   │ Zones:           │   │ OCP 4.21          │   │ oc CLI             │
+   │ example.internal │   │ api.* and *.apps.*│   │ openshift-install  │
+   │                  │   │ Disk: LVM thin    │   │                    │
+   └──────────────────┘   └───────────────────┘   └────────────────────┘
 ```
 
 ---
@@ -547,15 +578,15 @@ oc get csr | grep Pending | awk '{print $1}' | xargs oc adm certificate approve
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Disk I/O too slow for etcd         | Bootstrap kube-apiserver startup probes fail with HTTP 500, `poststarthook/rbac/bootstrap-roles failed`. `dd oflag=dsync` shows < 10 MB/s | Move VM disk to LVM thin storage. Do not use qcow2-on-directory.                                                                                                       |
 | `install-to-disk` busy partitions  | `Error: checking for exclusive access to /dev/sda: found busy partitions: /dev/sda3 mounted on /boot, /dev/sda4 mounted on /sysroot`     | ISO was built with `--dest-ignition`. Rebuild with `--live-ignition` so bootstrap runs in RAM.                                                                         |
-| ISO overwrites permanent install   | After `install-to-disk` completes and reboots, the ISO boots again and `coreos-installer` rewrites the disk                               | Eject the ISO during the 60-second reboot countdown: `qm set <VMID> --ide2 none,media=cdrom`                                                                           |
+| ISO overwrites permanent install   | After `install-to-disk` completes and reboots, the ISO boots again and `coreos-installer` rewrites the disk                               | Set `VM_ID` to the lab VM and eject the ISO during the 60-second reboot countdown: `qm set "$VM_ID" --ide2 none,media=cdrom`                                          |
 | MCD firstboot service missing      | `machine-config-daemon-firstboot.service` not found, `/etc/kubernetes/manifests/` empty or missing                                        | The permanent ignition was not applied. Usually caused by `--dest-ignition` or ISO rebooting over the permanent install. Rebuild with `--live-ignition` and eject ISO. |
 | Ignition skipped (first-boot lost) | Node idle, no bootstrap services, logs show `ConditionFirstBoot=true` skipped                                                             | Only applies to `--dest-ignition` flow. With `--live-ignition`, this is not an issue. If using dest-ignition: wipe disk, boot ISO once, immediately flip boot order.   |
 | DHCP gives wrong IP                | Node gets IP from dynamic range instead of static reservation                                                                             | Clear stale leases in `/var/lib/misc/dnsmasq.leases`, restart dnsmasq.                                                                                                 |
 | Bootstrap timeout                  | `wait-for bootstrap-complete` times out at 45 minutes                                                                                     | Check VM console, DNS resolution, network connectivity, disk I/O performance, ignition logs.                                                                           |
 | API not reachable                  | `oc login` fails / `no route to host`                                                                                                     | Verify DNS for `api.lab.example.internal`, check firewall ports 6443/22623.                                                                                    |
-| `node-image-pull.service` failed   | `ref coreos/node-image already exists`                                                                                                    | Harmless , image was already present. Does not block the install.                                                                                                      |
+| `node-image-pull.service` failed   | `ref coreos/node-image already exists`                                                                                                    | This was harmless in the recorded run because the image was present and installation continued. Confirm later service and installer progress before ignoring it.       |
 | Node NotReady                      | `oc get nodes` shows NotReady                                                                                                             | Check `oc describe node`, `oc get clusteroperators`, approve pending CSRs.                                                                                             |
-| etcd operator retrying             | `Error getting etcd operator singleton, retrying: server unable to return response in time`                                               | Normal during initial deployment , the system is under heavy load. Wait 10-20 minutes.                                                                                 |
+| etcd operator retrying             | `Error getting etcd operator singleton, retrying: server unable to return response in time`                                               | It occurred transiently during this deployment. Watch operator state and storage latency; investigate if it persists instead of treating every occurrence as normal.    |
 
 ---
 

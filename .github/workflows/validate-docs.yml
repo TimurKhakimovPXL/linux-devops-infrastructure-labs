@@ -1,0 +1,24 @@
+---
+name: Validate documentation
+
+'on':
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check sanitization
+        run: ./scripts/preflight.sh
+
+      - name: Check documentation and scripts
+        run: ./scripts/validate-docs.sh

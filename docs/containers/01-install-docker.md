@@ -23,62 +23,70 @@ Enable *OpenSSH Server* during installation if you plan to connect remotely. Whe
 
 ## 2. Update the System
 
+Run the installation commands on the target VM as the account created during OS installation. It must have `sudo` access.
+
 ```bash
 sudo apt update && sudo apt upgrade -y
 ```
 
 ## 3. Install Docker Engine
+
+Docker publishes separate APT repositories for Debian and Ubuntu. The following block reads the target VM's `/etc/os-release` and selects the matching repository. It stops instead of treating another Debian-derived distribution as interchangeable.
+
 ```bash
-##Install
-sudo apt install -y ca-certificates curl gnupg lsb-release
+sudo apt install -y ca-certificates curl
 
-##Add Docker's official GPG key
-sudo mkdir -p /etc/apt/keyrings
-sudo chmod 755 /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | 
-sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
+. /etc/os-release
+case "$ID" in
+  debian|ubuntu) docker_distribution="$ID" ;;
+  *)
+    echo "Unsupported distribution: $ID" >&2
+    exit 1
+    ;;
+esac
 
-##Add the Docker repository
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-  https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL \
+  "https://download.docker.com/linux/${docker_distribution}/gpg" \
+  -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-##Update package index and install Docker
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${docker_distribution} ${VERSION_CODENAME} stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+
 sudo apt update
-sudo apt install -y 
-docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo apt install -y \
+  docker-ce \
+  docker-ce-cli \
+  containerd.io \
+  docker-buildx-plugin \
+  docker-compose-plugin
 
-##Note
-For Debian use:
-curl -fsSL https://download.docker.com/linux/debian/gpg | 
-sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-For other distros refer to official documentation
-
-##Enabling
 sudo systemctl enable --now docker
-##Verify
 sudo docker run --rm hello-world
 ```
 
-## 4. Create a Non-Privileged User for Docker
+This installs the current packages from Docker's stable channel. To reproduce an older lab at exact package versions, record the values from `apt list --installed 'docker*' containerd.io` and use version-qualified package names; this document does not invent a historical version pin.
+
+## 4. Create a Docker User
 
 Add the lab user to the `docker` group so Docker can be used without `sudo`. Membership in this group is effectively root access, so grant it only to trusted users.
 
 ```bash
-##Create the user
 sudo adduser labuser
-##Add the user to the docker group
 sudo usermod -aG docker labuser
-##Verify group membership
 id labuser
-##Test Docker as the user
-su - labuser
+```
+
+Group membership is read when a login session starts. Log out and back in as `labuser`, or open a fresh SSH session, before testing:
+
+```bash
 docker run --rm hello-world
 docker run -it --rm debian /bin/bash
 ```
 - **Docker Engine Installation (Ubuntu):** [https://docs.docker.com/engine/install/ubuntu/](https://docs.docker.com/engine/install/ubuntu/)
+
+- **Docker Engine Installation (Debian):** [https://docs.docker.com/engine/install/debian/](https://docs.docker.com/engine/install/debian/)
     
 - **Docker Post-installation Steps (User Group Setup):** [https://docs.docker.com/engine/install/linux-postinstall/](https://docs.docker.com/engine/install/linux-postinstall/)
     

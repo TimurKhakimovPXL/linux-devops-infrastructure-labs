@@ -10,22 +10,22 @@ Build a small Flask image from a fully qualified Python base image, test it with
 
 ---
 
-# 1. Project Structure
+## 1. Project Structure
 
 Place the container build files in `containers/webserver/`:
 
-containers/  
-└── webserver/  
-├── app.py  
-├── Containerfile  
-└── requirements.txt
-
+```text
+containers/
+└── webserver/
+    ├── app.py
+    └── Containerfile
 ```
+
 ---
 
-# 2. Python Application
+## 2. Python Application
 
-## `app.py`
+### `app.py`
 
 ```python
 from flask import Flask
@@ -34,10 +34,10 @@ app = Flask(__name__)
 
 @app.route("/")
 def hello():
-    return "Hello from Flask inside a Podman container!"
+    return "Hello, World!"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=8080)
 
 ```
 1. `Flask(__name__)` creates the application and tells Flask where to find its resources.
@@ -45,90 +45,85 @@ if __name__ == "__main__":
 3. The `if __name__ == "__main__"` guard starts the server only when the script is run directly.
 4. `host="0.0.0.0"` listens on every container interface.
 
-## 
+## 3. Containerfile
 
-
-## 3. Containerfile 
-
-```
-# Fully qualified
+```dockerfile
 FROM docker.io/library/python:3.12-slim-bookworm
 
-
-# Copy application
+WORKDIR /app
 COPY app.py /app/app.py
 
-WORKDIR /app
+RUN pip install --no-cache-dir Flask==3.1.2
 
-RUN pip install flask
-
-# Container port 
 EXPOSE 8080
 
-# Run the Flask application
 CMD ["python", "app.py"]
-
 ```
 
+The base image name is fully qualified, but its tag is still mutable. Flask is pinned directly, while its transitive dependencies are still resolved during the build. A bit-for-bit rebuild therefore needs both a reviewed base-image digest for the required platform and a generated dependency lock with hashes; those historical values were not recorded, so they are not invented here.
 
-### 4️) Build the image using Podman
+This uses Flask's development server because the image is a small lab workload. It is not a production WSGI deployment.
+
+
+## 4. Build the image using Podman
+
+Run the remaining commands as the unprivileged Podman user from `containers/webserver/`:
 
 ```bash
-
-podman build -t hello-world-webserver .
-
+podman build -t hello-world-webserver:1.0 .
 ```
-### 5️) Run and test
+
+## 5. Run and test
 
 ```bash
-
-podman run -d -p 8080:8080 --name hello hello-world-webserver
-
+podman run -d --replace \
+  --name hello \
+  -p 127.0.0.1:8080:8080 \
+  localhost/hello-world-webserver:1.0
 curl 127.0.0.1:8080
-
-```
-Output:
-
 ```
 
+Expected output:
+
+```text
 Hello, World!
-
 ```
 
 ---
 
-### 6️) Tag and push to a registry
+## 6. Tag and push to a registry
+
+Replace `YOUR_QUAY_USER` with the Quay namespace that owns an existing repository named `hello-world-webserver`. `podman login` prompts for the registry password or robot token; do not place it in the document or shell history.
 
 ```bash
-
-podman tag hello-world-webserver quay.io/YOUR_QUAY_USER/hello-world-webserver:latest
-
+podman tag \
+  localhost/hello-world-webserver:1.0 \
+  quay.io/YOUR_QUAY_USER/hello-world-webserver:1.0
 podman login quay.io
-
-podman push quay.io/YOUR_QUAY_USER/hello-world-webserver:latest
-
+podman push quay.io/YOUR_QUAY_USER/hello-world-webserver:1.0
 ```
 
 Pulling the image:
 
 ```bash
-
-podman pull quay.io/<yourusername>/hello-world-webserver:latest
-
-podman run -d -p 8080:8080 YOUR_QUAY_USER/hello-world-webserver:latest
-
+podman rm -f hello
+podman pull quay.io/YOUR_QUAY_USER/hello-world-webserver:1.0
+podman run -d --replace \
+  --name hello-from-quay \
+  -p 127.0.0.1:8080:8080 \
+  quay.io/YOUR_QUAY_USER/hello-world-webserver:1.0
 curl 127.0.0.1:8080
-
 ```
 
- **Expected output:**
+Expected output:
 
-```
+```text
 Hello, World!
 ```
 
+The following console transcript is retained from the original lab run. It used the then-current short base-image tag and unpinned Flask install; the maintained example above pins Flask and uses the explicit Bookworm tag.
 
-```
+```console
 ansible-controller@lab-host:~/webserver$ podman build -t hello-world-webserver .
 STEP 1/6: FROM python:3.12-slim
 Resolved "python" as an alias (/etc/containers/registries.conf.d/shortnames.conf)

@@ -70,9 +70,15 @@ Create two files: GitLab's application backup and a separate archive containing 
 
 ### 3.1 Expand Disk (If Required)
 
-The 14 GB backup archive requires sufficient free space on the source VM. If the partition is at capacity, expand it before proceeding.
+The 14 GB backup archive requires sufficient free space on the source VM. The commands below match the recorded `/dev/sda3` + LVM + XFS layout and modify its partition table. Confirm the actual device, volume, and filesystem with `lsblk -f`, `pvs`, `lvs`, and `findmnt /` before using them; another layout needs different commands.
 
 ```bash
+# Inspect the source VM first. Continue only if these names match.
+lsblk -f
+sudo pvs
+sudo lvs
+findmnt /
+
 # Expand partition to use 100% of allocated disk
 sudo parted /dev/sda resizepart 3 100%
 sudo pvresize /dev/sda3
@@ -85,14 +91,13 @@ df -h /
 
 ### 3.2 Generate Application Data Backup
 
-This command backs up the database, repositories, CI/CD artifacts, wikis, uploads, LFS objects, and registry data.
+This command backs up the database, repositories, CI/CD artifacts, wikis, uploads, LFS objects, and locally stored registry data. Data kept in object storage needs the separate backup process for that storage; `gitlab-backup` does not copy those objects into this archive.
 
 ```bash
 sudo gitlab-backup create
-
-# Output artifact:
-# /var/opt/gitlab/backups/[TIMESTAMP]_18.8.4-ee_gitlab_backup.tar
 ```
+
+The output names the generated archive, for example `/var/opt/gitlab/backups/<timestamp>_18.8.4-ee_gitlab_backup.tar`. Keep the part before `_gitlab_backup.tar` as `BACKUP_ID` in the following steps.
 
 ### 3.3 Generate Configuration and Secrets Archive
 
@@ -102,31 +107,38 @@ GitLab's standard backup excludes its configuration and secrets. Archive them se
 
 ```bash
 # Archive config, secrets, and SSL certificates
-sudo tar -cvf gitlab_config_backup.tar \
+sudo tar -cvf "$HOME/gitlab_config_backup.tar" \
   /etc/gitlab/gitlab.rb \
   /etc/gitlab/gitlab-secrets.json \
   /etc/gitlab/ssl/
-
-# Output artifact:
-# gitlab_config_backup.tar
+sudo chown "$(id -u):$(id -g)" "$HOME/gitlab_config_backup.tar"
+chmod 600 "$HOME/gitlab_config_backup.tar"
 ```
+
+If `/etc/gitlab/ssl/` does not exist on the source, omit that path rather than ignoring the tar error. Treat this archive as a secret because it contains `gitlab-secrets.json` and may contain TLS private keys.
 
 ### 3.4 Transfer Artifacts to Target
 
-Transfer both artifacts to the target server. Confirm checksums after transfer to rule out corruption during transit.
+Transfer both artifacts to the target server. In this sanitized example, `labuser` is the normal SSH account created during the RHEL installation; it is not GitLab's service account. Replace `<timestamp>` once, then confirm checksums on both hosts.
 
 ```bash
-# Transfer application backup
-scp /var/opt/gitlab/backups/[TIMESTAMP]_18.8.4-ee_gitlab_backup.tar \
-  gitlab@192.168.50.30:/home/gitlab/
+# On the source VM
+BACKUP_ID="<timestamp>_18.8.4-ee"
+sudo cp "/var/opt/gitlab/backups/${BACKUP_ID}_gitlab_backup.tar" "$HOME/"
+sudo chown "$(id -u):$(id -g)" "$HOME/${BACKUP_ID}_gitlab_backup.tar"
+chmod 600 "$HOME/${BACKUP_ID}_gitlab_backup.tar"
 
-# Transfer config and secrets archive
-scp gitlab_config_backup.tar gitlab@192.168.50.30:/home/gitlab/
+scp "$HOME/${BACKUP_ID}_gitlab_backup.tar" \
+  labuser@192.168.50.30:/home/labuser/
+scp "$HOME/gitlab_config_backup.tar" \
+  labuser@192.168.50.30:/home/labuser/
 
-# Verify integrity: run on both source and target, hashes must match
-sha256sum [TIMESTAMP]_18.8.4-ee_gitlab_backup.tar
-sha256sum gitlab_config_backup.tar
+# Record source hashes.
+sha256sum "$HOME/${BACKUP_ID}_gitlab_backup.tar" \
+  "$HOME/gitlab_config_backup.tar"
 ```
+
+On the target VM, run `sha256sum` on the two files under `/home/labuser` and compare the results with the source output before continuing.
 
 ---
 
@@ -144,11 +156,14 @@ sudo dnf install -y tar
 
 ### 4.2 Install GitLab EE 18.8.4
 
-> **⚠ Warning:** Install the exact same version (`18.8.4-ee`) that generated the backup. GitLab does not support cross-version restores. Note the `.el10` package suffix: RHEL 10 is not `el9`.
+> **⚠ Warning:** The target must use the same GitLab version and edition (`18.8.4-ee`) that generated this backup. Restore first, then follow supported upgrade paths separately. The package suffix must also match the target operating system.
 
 ```bash
-# Add the GitLab EE package repository
-curl https://packages.gitlab.com/install/repositories/gitlab/gitlab-ee/script.rpm.sh | sudo bash
+# Add the GitLab EE package repository after reviewing the downloaded script.
+curl -fsSL \
+  https://packages.gitlab.com/install/repositories/gitlab/gitlab-ee/script.rpm.sh \
+  -o /tmp/gitlab-ee-repository.sh
+sudo bash /tmp/gitlab-ee-repository.sh
 
 # Install GitLab EE 18.8.4 for RHEL 10
 # HTTP is intentional: this instance is internal-only via Tailscale.
@@ -163,14 +178,26 @@ sudo EXTERNAL_URL="http://192.168.50.30" \
 
 ### 5.1 Stage the Backup File
 
-Copy the backup archive to the official GitLab backup directory and set the required ownership. The restore task refuses to process files not owned by the `git` user.
+Copy the backup archive to the official GitLab backup directory and set the required ownership. In a new shell on the target VM, set `BACKUP_ID` to the same value used on the source. The restore task expects the file to be owned by the `git` service account.
 
 ```bash
-sudo cp /home/gitlab/[TIMESTAMP]_18.8.4-ee_gitlab_backup.tar /var/opt/gitlab/backups/
-sudo chown git:git /var/opt/gitlab/backups/[TIMESTAMP]_18.8.4-ee_gitlab_backup.tar
+BACKUP_ID="<timestamp>_18.8.4-ee"
+sudo cp "/home/labuser/${BACKUP_ID}_gitlab_backup.tar" /var/opt/gitlab/backups/
+sudo chown git:git "/var/opt/gitlab/backups/${BACKUP_ID}_gitlab_backup.tar"
 ```
 
-### 5.2 Stop Application Workers
+### 5.2 Restore Configuration and Secrets
+
+GitLab requires the matching `gitlab-secrets.json` before the database restore. Restore the protected configuration archive and run `reconfigure` now, while the destination still contains no migrated application data.
+
+```bash
+sudo tar -xf /home/labuser/gitlab_config_backup.tar -C /
+sudo gitlab-ctl reconfigure
+```
+
+Check the restored `external_url`, storage paths, and any external database or object-storage settings in `/etc/gitlab/gitlab.rb` before continuing. They must either still apply to the target or be adjusted deliberately; the sanitized runbook cannot supply environment-specific values.
+
+### 5.3 Stop Application Workers
 
 The restore requires Puma and Sidekiq to be stopped. PostgreSQL and Redis must remain running: the restore process writes directly to the database.
 
@@ -182,57 +209,52 @@ sudo gitlab-ctl stop sidekiq
 sudo gitlab-ctl status
 ```
 
-### 5.3 The gtar Interceptor (RHEL 10 + GitLab 18.x Workaround)
+### 5.4 The gtar Interceptor (RHEL 10 + GitLab 18.x Workaround)
 
 During this lab, GitLab's Ruby restore task called `gtar`, which returned a non-zero status after trying to unlink its working directory. GitLab treated that status as fatal even though extraction had completed.
 
-The temporary workaround was a `/bin/gtar` wrapper that passed the arguments to the real binary and forced a zero exit code.
+The temporary workaround was a `gtar` wrapper that passed the arguments to the real GNU tar binary and forced a zero exit code. The first attempt used aliases around `/bin/tar` and recursed; the corrected wrapper uses an explicit `/usr/bin/tar` path and leaves the system binary in place.
 
 > **⚠ Warning:** The `|| true` construct suppresses all non-zero exit codes from `tar`: not just the unlink error. Monitor console output manually during restore. If you see `Disk full` or `Cannot open: Input/output error`, stop immediately and investigate before declaring success.
 
 ```bash
-# Step 1: Isolate the real binary (prevents infinite recursion)
-sudo mv /bin/tar /bin/tar.orig
+# Create the temporary interceptor ahead of /usr/bin in root's PATH.
+sudo tee /usr/local/bin/gtar >/dev/null <<'SCRIPT'
+#!/usr/bin/env bash
+/usr/bin/tar "$@" || true
+SCRIPT
+sudo chmod 0755 /usr/local/bin/gtar
 
-# Step 2: Create the interceptor wrapper
-echo '#!/bin/bash' | sudo tee /bin/gtar
-echo '/bin/tar.orig "$@" || true' | sudo tee -a /bin/gtar
-sudo chmod +x /bin/gtar
+# Confirm the restore process will resolve this wrapper.
+sudo sh -c 'command -v gtar'
 ```
 
-> **Note:** Renaming `tar` to `tar.orig` is critical. A symlink or alias approach causes infinite recursion where `gtar` calls `tar` which calls `gtar`. The rename breaks the loop by giving the wrapper a stable target.
+> **Note:** Calling `/usr/bin/tar` explicitly prevents the `gtar → tar → gtar` recursion seen in the earlier attempt. This remains a narrow lab workaround, not a permanent system configuration.
 
-### 5.4 Execute the Restore
+### 5.5 Execute the Restore
 
-Run the restore task. Provide only the timestamp prefix: omit the `_gitlab_backup.tar` suffix.
+Run the restore task. Provide the backup ID recorded earlier and omit the `_gitlab_backup.tar` suffix.
 
 ```bash
-sudo gitlab-backup restore BACKUP=[TIMESTAMP]_18.8.4-ee
+sudo gitlab-backup restore BACKUP="$BACKUP_ID"
 
 # When prompted:
 #   'Do you want to continue (yes/no)?'        → type: yes
 #   'Do you want to rebuild authorized_keys?'  → type: yes
 ```
 
-Expected warnings that can be safely ignored:
-- `must be owner of extension pg_trgm`: PostgreSQL extension owner mismatch. Harmless; does not affect functionality.
+The recorded restore printed `must be owner of extension pg_trgm`. It did not affect that migration, but the warning should only be accepted after the restore exits successfully and the health checks below pass.
 
 ---
 
 ## 6. Phase IV: Configuration Restore and Validation
 
-### 6.1 Restore Configuration and Secrets
+### 6.1 Reconfigure and Start GitLab
 
-Secrets must be restored before running `reconfigure`. The reconfigure step reads `gitlab-secrets.json` to configure encryption: if the file is missing or wrong, the instance will start but all encrypted data (tokens, passwords, 2FA) will be unreadable.
+The matching configuration and secrets were restored in Section 5.2. Reconfigure once more after the data restore, then start all services.
 
 ```bash
-# Restore secrets and configuration (must precede reconfigure)
-sudo tar -xf /home/gitlab/gitlab_config_backup.tar -C /
-
-# Apply configuration
 sudo gitlab-ctl reconfigure
-
-# Start all services
 sudo gitlab-ctl restart
 ```
 
@@ -249,16 +271,17 @@ sudo gitlab-rake gitlab:doctor:secrets
 sudo gitlab-rake gitlab:check SANITIZE=true
 ```
 
+After the migration is accepted, remove the staging copies from both users' home directories or move them to approved encrypted backup storage. Do not leave `gitlab_config_backup.tar` readable in a general-purpose home directory.
+
 ### 6.3 Revert the gtar Wrapper
 
 Restore the system `tar` binary to its original state. Leaving the wrapper in place would suppress legitimate `tar` errors system-wide.
 
 ```bash
-sudo rm -f /bin/gtar
-sudo mv /bin/tar.orig /bin/tar
+sudo rm -f /usr/local/bin/gtar
 
 # Confirm tar is functional
-tar --version
+/usr/bin/tar --version
 ```
 
 ---
@@ -283,7 +306,7 @@ For internal access through `gitlab.lab.example.internal`, add this entry to the
 
 **Linux/macOS:** `/etc/hosts`
 
-```
+```text
 192.168.50.30    gitlab.lab.example.internal
 ```
 
@@ -295,10 +318,10 @@ For internal access through `gitlab.lab.example.internal`, add this entry to the
 
 | Error | Cause | Resolution |
 |---|---|---|
-| `gtar: .: Functie unlink() is mislukt` | `gtar` attempts to unlink working directory on modern kernels. | Deploy the `gtar` interceptor wrapper (Section 5.3). |
-| `shell-niveau is te hoog (1000)` | Infinite recursion: `tar` calls `gtar` calls `tar`. | Rename original binary to `/bin/tar.orig` instead of symlinking. |
+| `gtar: .: Functie unlink() is mislukt` | `gtar` attempts to unlink working directory on modern kernels. | Deploy the `gtar` interceptor wrapper (Section 5.4). |
+| `shell-niveau is te hoog (1000)` | Infinite recursion: `tar` calls `gtar` calls `tar`. | Make the temporary `gtar` wrapper call `/usr/bin/tar` explicitly; do not alias `tar` back to `gtar`. |
 | `vereist bestand is niet gevonden` | `tar` utility absent from RHEL 10 Minimal profile. | `sudo dnf install -y tar` (Section 4.1). |
-| `must be owner of extension pg_trgm` | PostgreSQL extension owner mismatch from source instance. | Safe to ignore. Does not affect GitLab functionality. |
+| `must be owner of extension pg_trgm` | PostgreSQL extension owner mismatch from source instance. | It was non-fatal in this run. Confirm restore exit status and run both GitLab health checks before accepting it. |
 | Connection Timed Out (port 80) | `firewalld` blocking HTTP on RHEL. | `firewall-cmd --permanent --add-service=http` (Section 7.1). |
 | `curl http://192.168.50.30` returns HTTP 302 to `/users/sign_in` | Not an error: expected GitLab behaviour. | 302 redirect confirms the Rails engine is healthy. |
 
@@ -311,7 +334,7 @@ For internal access through `gitlab.lab.example.internal`, add this entry to the
 | 0 | Pre-Migration | `gitlab:check`, `gitlab:doctor:secrets` on source | Both rake tasks pass |
 | I | Source Backup | `gitlab-backup create`, config tar, SCP transfer | SHA256 checksums match on both ends |
 | II | Target Prep | Install `tar`, install GitLab EE 18.8.4 (el10) | `gitlab-ctl status`: all services run |
-| III | Restore | Stage file, stop workers, `gtar` wrapper, `gitlab-backup restore` | Restore exits without fatal errors |
-| IV | Config + Validation | Restore secrets, `reconfigure`, `restart`, rake checks | Both rake tasks pass on target |
+| III | Restore | Stage file, restore matching secrets, stop workers, use the temporary `gtar` wrapper, run `gitlab-backup restore` | Restore exits without fatal errors |
+| IV | Reconfigure + Validation | `reconfigure`, `restart`, rake checks | Both rake tasks pass on target |
 | V | Networking | `firewall-cmd`, hosts file, Tailscale verify | Browser loads sign-in page |
-| Post | Cleanup | Remove `gtar` wrapper, restore `/bin/tar` | `tar --version` succeeds |
+| Post | Cleanup | Remove the temporary `gtar` wrapper | `/usr/bin/tar --version` succeeds |
