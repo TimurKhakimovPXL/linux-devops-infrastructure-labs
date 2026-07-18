@@ -17,23 +17,34 @@ These are the working notes and runbooks I produced during a DevOps and infrastr
 ## Repository structure
 
 ```text
-docs/
-├── containers/
-│   ├── 01-install-docker.md
-│   ├── 02-rootless-podman.md
-│   ├── 03-docker-vs-rootless-podman.md
-│   ├── 04-ansible-docker-installation.md
-│   ├── 05-oci-standard.md
-│   ├── 06-build-oci-webserver-image.md
-│   ├── 07-rootless-quadlet-nginx-ansible.md
-│   └── 08-red-hat-ubi.md
-└── openshift-platform/
-    ├── 00-kubernetes-openshift-basics.md
-    ├── 01-single-node-openshift-on-proxmox.md
-    ├── 02-gitlab-ee-migration-to-rhel.md
-    ├── 03-openshift-gitops-argocd.md
-    ├── 04-pki-cert-manager-gitlab-oauth.md
-    └── 05-static-website-via-gitops.md
+.
+├── .github/
+│   └── workflows/
+│       └── validate-docs.yml
+├── docs/
+│   ├── containers/
+│   │   ├── 01-install-docker.md
+│   │   ├── 02-rootless-podman.md
+│   │   ├── 03-docker-vs-rootless-podman.md
+│   │   ├── 04-ansible-docker-installation.md
+│   │   ├── 05-oci-standard.md
+│   │   ├── 06-build-oci-webserver-image.md
+│   │   ├── 07-rootless-quadlet-nginx-ansible.md
+│   │   └── 08-red-hat-ubi.md
+│   └── openshift-platform/
+│       ├── 00-kubernetes-openshift-basics.md
+│       ├── 01-single-node-openshift-on-proxmox.md
+│       ├── 02-gitlab-ee-migration-to-rhel.md
+│       ├── 03-openshift-gitops-argocd.md
+│       ├── 04-pki-cert-manager-gitlab-oauth.md
+│       └── 05-static-website-via-gitops.md
+├── scripts/
+│   ├── preflight.sh
+│   └── validate-docs.sh
+├── .gitignore
+├── LICENSE
+├── README.md
+└── SANITIZATION.md
 ```
 
 ## Learning path
