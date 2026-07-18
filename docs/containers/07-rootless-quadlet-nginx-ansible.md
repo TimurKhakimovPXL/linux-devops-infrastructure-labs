@@ -10,7 +10,6 @@ Run the Flask image with rootless Podman and manage it as a systemd user service
 - dependency management  
 - clean logs  
 - rootless operation  
-- integration with `--userns=auto`  
 
 User lingering keeps the service running after logout and starts the user manager during boot.
 
@@ -73,7 +72,6 @@ Description=Hello World Web Server (Quadlet)
 Image=quay.io/YOUR_QUAY_USER/hello-world-webserver:1.0
 ContainerName=web-quadlet
 PublishPort=127.0.0.1:8080:8080
-UserNS=auto
 
 [Service]
 Restart=always
@@ -297,7 +295,6 @@ Description={{ container_name }} (rootless via Quadlet)
 [Container]
 Image={{ container_image }}
 PublishPort={{ publish_port }}
-UserNS=auto
 
 [Service]
 Restart=always
@@ -307,7 +304,9 @@ RestartSec=2
 WantedBy=default.target
 ```
 
-The `publish_port` variable includes `127.0.0.1`, so only the local Nginx process can reach the published backend. `UserNS=auto` gives each container its own subordinate-ID mapping; the host account that launches Podman is not mapped into that container. Quadlet owns the generated `podman run` lifecycle, so the template does not need an extra `--replace` argument.
+The `publish_port` variable includes `127.0.0.1`, so only the local Nginx process can reach the published backend. Quadlet owns the generated `podman run` lifecycle, so the template does not need an extra `--replace` argument.
+
+Per-container ID isolation with `UserNS=auto` is available as a hardening option, but it requires a dedicated `containers:` subordinate-ID range in `/etc/subuid` and `/etc/subgid`; see the [Podman systemd unit documentation](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html). This lab ran with Podman's default rootless mapping.
 
 ## TLS Certificate Generation
 
@@ -869,7 +868,6 @@ Description={{ container_name }} (rootless via Quadlet)
 Image={{ container_image }}
 ContainerName={{ container_name }}
 PublishPort={{ publish_port }}
-UserNS=auto
 
 [Service]
 Restart=always
